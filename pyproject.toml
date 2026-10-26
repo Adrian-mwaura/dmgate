@@ -7,7 +7,10 @@ name = "dmgate"
 version = "0.0.1"
 description = "Agent data minimization via model-rule fusion (Huawei Challenge 5)"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "tree-sitter>=0.23",
+  "tree-sitter-bash>=0.23",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2"]

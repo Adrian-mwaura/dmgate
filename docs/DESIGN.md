@@ -330,16 +330,16 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
 | P4 | Lifecycle: abductive loop, GEPA, LoRA, patch promotion | E4, E5 |
 | P5 | FS/DB benchmark release, demo UI (decision-trace viewer), write-up | — |
 
-Status: **rebuild in progress (since 2026-10-26).** P0 and M1 were first built as a prototype in
-`C:\Users\adria\OneDrive\Desktop\Huawei Challenge` (kept as reference, not maintained). They are
-being rebuilt here chunk by chunk: record schema, gate interface, scoring, exact and clustered CIs,
-reports, harness CLI, AmPermBench probe set (P0), then the effect resolver (M1).
+Status: **P0 and M1 done (2026-10-26)**, rebuilt in this repository from the first prototype
+(`C:\Users\adria\OneDrive\Desktop\Huawei Challenge`, kept as reference only). P0: record schema,
+gate interface, scoring, exact and clustered CIs, reports, harness CLI, AmPermBench probe set.
+M1: effect resolver. 60 tests.
 
 ### P1 milestones
 
 | # | Milestone | Validation | Needs from user |
 |---|---|---|---|
-| M1 | Effect model, resource registry, shell resolver (tree-sitter-bash); prototype done, rebuild pending | Resolved targets equal ground truth on all 2,560 probe commands (parser correctness, not tuning) | — |
+| M1 ✅ | Effect model, resource registry, shell resolver (tree-sitter-bash) | Resolved targets equal ground truth on all 2,560 probe commands (parser correctness, not tuning) | — |
 | M2 | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact | — |
 | M3 | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor | OK to download the OPA binary |
 | M4 | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests | — |
