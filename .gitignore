@@ -1,0 +1,16 @@
+# Python caches and build output
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# The project's private Python environment
+.venv/
+
+# Harness output (regenerated, never committed)
+results/
+
+# Third-party checkouts (untrusted; cloned locally, never committed)
+external/

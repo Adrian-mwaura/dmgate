@@ -1,0 +1,6 @@
+# Store text files with LF line endings so scripts behave the same in Linux containers.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
