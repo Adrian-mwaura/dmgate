@@ -383,7 +383,8 @@ reports, harness CLI, AmPermBench probe set (P0), then the effect resolver (M1).
 | 2026-10-26 | Position 6: abductive rule–model loop |
 | 2026-10-26 | Position 7: handles with dual view; closes the `.env` masking question |
 | 2026-10-26 | P0 done; Q9 adopted: FS/DB dev benchmark v0 and OpenHands AmPermBench runs move into P1 |
-| 2026-10-26 | Restart in `C:\Users\adria\Projects\dmgate` (outside OneDrive, private GitHub backup). Claude supplies code in small explained chunks, the user pastes them, then Claude reviews with permission. Prototype kept as reference |
+| 2026-10-26 | Restart in `C:\Users\adria\Projects\dmgate` (outside OneDrive, private GitHub backup). Prototype kept as reference |
+| 2026-10-26 | Build mode: Claude builds each milestone, then teaches it to the user with exercises. P0 and M1 rebuilt here first |
 
 ## 13. References
 

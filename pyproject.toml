@@ -12,6 +12,9 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8.2"]
 
+[project.scripts]
+dmgate-eval = "dmgate.harness:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

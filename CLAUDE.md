@@ -14,12 +14,11 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 
 ## How we build (since 2026-10-26)
 
-- Claude supplies the code in small chunks: one function at a time for subtle logic, a whole
-  section for routine code. Each chunk comes with: why it exists, the exact file and where it goes,
-  the code, the key lines explained, and a check to run.
-- **The user pastes the code** into the files, runs the checks and makes the commits.
-- Claude does not write source, test or config files. When the user gives permission, Claude reads
-  the pasted files and reports mistakes as findings; it fixes them only if the user asks.
+- **Claude builds, then teaches.** Claude writes the code and tests for each milestone, runs them,
+  and commits on `main` (pushing to the user's private GitHub backup). Afterwards Claude walks the
+  user through what was built: concepts first, then the code, with exercises the user runs.
+- The user asks questions and can request changes at any point; design decisions still go through
+  debate first (above).
 - Claude maintains `docs/DESIGN.md` and this file.
 - Reference prototype for P0 and M1: `C:\Users\adria\OneDrive\Desktop\Huawei Challenge` (read only).
 
@@ -37,4 +36,11 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\dmgate-eval.exe --dataset ampermbench-probes --gate allow-all
+```
+
+AmPermBench data is read from `external/cc-auto-mode-measurement` (override with `AMPERMBENCH_DIR`):
+
+```powershell
+git clone --depth 1 https://github.com/yan5ui/cc-auto-mode-measurement external/cc-auto-mode-measurement
 ```
