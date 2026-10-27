@@ -24,7 +24,7 @@ from typing import Any
 import tree_sitter_bash
 from tree_sitter import Language, Node, Parser
 
-from dmgate.effects.model import Effect, Resolution, Verb
+from dmgate.effects.model import LISTING, RECURSIVE, SENDS_DATA, SENDS_REPOSITORY, Effect, Resolution, Verb
 from dmgate.effects.registry import Registry, Resource
 
 _PARSER = Parser(Language(tree_sitter_bash.language()))
@@ -153,10 +153,19 @@ def _redirected(ctx: _Ctx, node: Node) -> None:
         _walk(ctx, body)
     body_range = range(start, len(ctx.effects))
     redirects = node.children_by_field_name("redirect") or [c for c in node.named_children if c.type.endswith("redirect")]
+    _apply_redirects(ctx, redirects, body_range)
+
+
+def _apply_redirects(ctx: _Ctx, redirects: list[Node], body: range) -> None:
+    """Add the redirects' effects, with data flows between them and the command they attach to."""
     for r in redirects:
         idx = _redirect(ctx, r)
-        if idx is not None and ctx.effects[idx].verb is Verb.WRITE:
-            ctx.flows.extend((i, idx) for i in body_range)
+        if idx is None:
+            continue
+        if ctx.effects[idx].verb is Verb.WRITE:
+            ctx.flows.extend((i, idx) for i in body)
+        elif ctx.effects[idx].verb is Verb.READ:  # `cmd < file`: the file's data feeds the command
+            ctx.flows.extend((idx, i) for i in body)
 
 
 _WRITE_REDIRECTS = {">", ">>", ">|", "&>", "&>>"}
@@ -242,10 +251,7 @@ def _command(ctx: _Ctx, node: Node) -> None:
     start = len(ctx.effects)
     _dispatch(ctx, [_eval(ctx, head), *args])
     body_range = range(start, len(ctx.effects))
-    for r in redirects:
-        idx = _redirect(ctx, r)
-        if idx is not None and ctx.effects[idx].verb is Verb.WRITE:
-            ctx.flows.extend((i, idx) for i in body_range)
+    _apply_redirects(ctx, redirects, body_range)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -525,7 +531,7 @@ _READERS = frozenset({
 
 _PATTERN_FIRST = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "jq", "yq", "awk"})
 _PATTERN_FLAGS = ("-e", "-f", "--regexp", "--file")
-_DEFAULT_DOT = frozenset({"ls", "tree", "du"})
+_LISTERS = frozenset({"ls", "tree", "du"})  # read names, not contents; default to "."
 
 _READER_VALUE_FLAGS: dict[str, frozenset[str]] = {
     "head": frozenset({"-n", "-c"}),
@@ -552,14 +558,14 @@ def _read_files(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     positional = [a for a in positional if a.text != "-"]
     if prog == "sort":
         _add(ctx, _file_effect(ctx, Verb.WRITE, _flag_value(args, "-o", "--output"), prog))
-    if not positional and prog in _DEFAULT_DOT:
+    if not positional and prog in _LISTERS:
         positional = [Arg(".", ".")]
-    _add(ctx, _file_effect(ctx, Verb.READ, positional, prog))
+    _add(ctx, _file_effect(ctx, Verb.READ, positional, prog, LISTING if prog in _LISTERS else ""))
 
 
 def _rm(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     recursive = _has_flag(args, "-r", "-R", "--recursive")
-    _add(ctx, _file_effect(ctx, Verb.DELETE, _positionals(args), prog, "recursive" if recursive else ""))
+    _add(ctx, _file_effect(ctx, Verb.DELETE, _positionals(args), prog, RECURSIVE if recursive else ""))
 
 
 def _write_positional(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
@@ -633,7 +639,7 @@ def _find(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     paths = paths or [Arg(".", ".")]
     expr = args[i:]
     texts = [a.text for a in expr]
-    _add(ctx, _file_effect(ctx, Verb.READ, paths, prog))
+    _add(ctx, _file_effect(ctx, Verb.READ, paths, prog, LISTING))
     selector = "find " + " ".join(a.raw for a in args)
     if "-delete" in texts:
         _add(ctx, Effect(Verb.DELETE, "file", unresolved=(selector,), command=prog, note="matches under " +
@@ -750,7 +756,7 @@ def _curl(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     payload = payload or bool(_flag_value(args, "--data-raw"))
     read = _add(ctx, _file_effect(ctx, Verb.READ, uploads, prog))
     hosts = _positionals(args, _CURL_VALUE_FLAGS) + _flag_value(args, "--url")
-    out = _egress(ctx, prog, hosts, "sends data" if payload else "")
+    out = _egress(ctx, prog, hosts, SENDS_DATA if payload else "")
     if read is not None and out is not None:
         ctx.flows.append((read, out))
     _add(ctx, _file_effect(ctx, Verb.WRITE, _flag_value(args, "-o", "--output"), prog))
@@ -764,7 +770,7 @@ def _wget(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     hosts = _positionals(args, value_flags)
     if _flag_value(args, "-i", "--input-file"):
         hosts.append(Arg(None, "<url list>"))
-    out = _egress(ctx, prog, hosts, "sends data" if payload else "")
+    out = _egress(ctx, prog, hosts, SENDS_DATA if payload else "")
     if read is not None and out is not None:
         ctx.flows.append((read, out))
     _add(ctx, _file_effect(ctx, Verb.WRITE, _flag_value(args, "-O", "--output-document"), prog))
@@ -794,7 +800,7 @@ def _scp_rsync(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     dest_host = _remote_host(dest)
     if dest_host:
         read = _add(ctx, _file_effect(ctx, Verb.READ, [s for s in sources if not _remote_host(s)], prog))
-        out = _add(ctx, Effect(Verb.EGRESS, "host", frozenset({dest_host}), command=prog, note="sends data"))
+        out = _add(ctx, Effect(Verb.EGRESS, "host", frozenset({dest_host}), command=prog, note=SENDS_DATA))
         if read is not None:
             ctx.flows.append((read, out))
     else:
@@ -924,7 +930,7 @@ def _git_push(ctx: _Ctx, rest: list[Arg]) -> None:
     if _has_flag(rest, "-n", "--dry-run"):
         _egress(ctx, "git push", [Arg(remote, remote or "remote")], "dry run")
         return
-    _egress(ctx, "git push", [Arg(remote, remote or "remote")], "sends repository data")
+    _egress(ctx, "git push", [Arg(remote, remote or "remote")], SENDS_REPOSITORY)
     if remote is None:
         _add(ctx, Effect(Verb.WRITE, "branch", unresolved=("dynamic remote",), command="git push"))
         return

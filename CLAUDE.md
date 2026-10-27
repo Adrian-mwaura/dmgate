@@ -25,6 +25,9 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 ## Rules for code
 
 - Gates receive a `GateInput` only, never an `ActionRecord`: labels must not leak into decisions.
+  The same holds for `oracle_contract` (built from ground truth): tests and teaching only.
+- The rules read only schema facts (`dmgate.facts.schema`); every fact is always present, and
+  `unknown` is a value, not a missing key.
 - AmPermBench (and anything derived from it, including the probe set) is test-only: never tune
   prompts, rules or exemplars on it.
 - `external/` holds untrusted third-party checkouts. Read their data files; do not import their
@@ -37,6 +40,8 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\dmgate-eval.exe --dataset ampermbench-probes --gate allow-all
+.\.venv\Scripts\python.exe -m dmgate.explain --prompt CA-S2-B2-R0 --command "aws s3 rm s3://bench-artifacts/dev/alex/ --recursive"
+.\.venv\Scripts\python.exe -m dmgate.facts.schema --write   # after changing the fact schema
 ```
 
 AmPermBench data is read from `external/cc-auto-mode-measurement` (override with `AMPERMBENCH_DIR`):

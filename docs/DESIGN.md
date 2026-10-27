@@ -89,23 +89,27 @@ never exact. Implemented in `dmgate.effects`.
 ### 5.3 Fact schema
 
 All facts the rules read are declared in a JSON schema with **finite domains**; the fact builder
-buckets numbers. Initial set (extended only through review):
+buckets numbers. There is one fact record per effect, and every fact is always present: where the
+builder cannot decide, the value is an explicit `unknown`, never a missing key. Implemented in
+`dmgate.facts.schema`; the JSON Schema for OPA is committed as `schema/facts.schema.json`. Set as of
+M2 (extended only through review; the M2 extensions are in Q10):
 
 | Fact | Domain | Source |
 |---|---|---|
 | `op` | effect verbs | effect resolver |
-| `max_sensitivity` | S0–S3 | catalogs + detectors (LLM for unknown columns) |
-| `targets_in_contract` | all / some / none | set comparison against contract |
-| `has_protected_target` | bool | registry |
-| `envelope_permits` | bool | contract envelope |
-| `provenance` | user / trusted_structure / observed / delegated / untrusted_instruction / agent_generated | taint ledger (+ LLM for "is this span an instruction?") |
-| `sink_class` | context / local / remote_allowlisted / remote_other / recipient_named / recipient_unnamed | deterministic |
-| `volume` | small / large / bulk vs contract expectation | deterministic |
-| `session_chain` | none / sensitive_read_then_egress / … | taint ledger |
-| `security_relevant_change` | none / auth / ci / permissions / network / deps | LLM on diff |
+| `opaque` | bool | effect resolver (an unparsed command is opaque) |
+| `unresolved` | bool | effect resolver (M2) |
+| `max_sensitivity` | S0–S3 / unknown | catalogs + detectors (LLM for uncatalogued targets); for writes and egress, also the data flowing in |
+| `targets_in_contract` | all / some / none | set comparison against contract; unresolved selectors never count as covered |
+| `has_protected_target` | bool | registry + catalog |
+| `envelope_permits` | bool | contract envelope; unknown sensitivity counts as S3 |
+| `provenance` | user / trusted_structure / delegated / observed / agent_generated / untrusted_instruction | context matching (+ LLM for "is this observed span an instruction?") |
+| `sink_class` | none / context / local / remote_allowlisted / remote_other / recipient_named / recipient_unnamed / unknown | resolver data flows + egress allowlist |
+| `volume` | small / large / bulk / unknown | target count vs contract expectation |
+| `session_chain` | none / sensitive_read_then_egress | session ledger + earlier effects of the action |
+| `security_relevant_change` | none / auth / ci / permissions / network / deps / unknown | path rules; LLM on the diff |
 | `cited_authorization` | none / verified | LLM quote + deterministic check |
-| `residual_risk_flag` | none / category | LLM, escalation only |
-| `opaque` | bool | effect resolver |
+| `residual_risk_flag` | none / sensitive / destructive / egress / untrusted_provenance | LLM, escalation only |
 
 ## 6. Components
 
@@ -121,6 +125,12 @@ with two layers:
 
 - **Grant lifetimes:** read grants last the session; destructive and egress grants last only the
   granting user turn; "continue"-style turns carry the previous turn's grants forward.
+- **Representation (M2, `dmgate.contract`):** a grant is (verb, kinds, sensitivity ceiling, egress
+  sink classes, source, turn, lifetime). A target spec names one kind by ids, path patterns, or a
+  selector of attribute conditions (`eq` / `in` / `contains`) evaluated against the registry, plus
+  the expected count ("my stale branch" is 1). The compiler emits selectors and code evaluates them,
+  so the LLM never lists resource ids itself. Write grants last the session because the sandbox
+  makes local writes reversible (Q10). `Contract.advance` applies lifetimes between turns.
 - **Ambiguous selectors** ("stale branches") cost one Ask per instruction; the answer fixes the
   definition for the session.
 - **Default profiles** are admin-set. The coding profile allows package fetches (no sensitive payload)
@@ -168,6 +178,39 @@ Opaque code is judged on what it actually did. Handling depends on reversibility
 Joins effects, contract, catalogs and the session taint ledger into the fact record (§5.3).
 The taint ledger records every string from user turns vs. tool outputs, every sensitive value read,
 and every handle issued.
+
+Implemented in M2 (`dmgate.facts`):
+
+- **One record per effect.** The rules decide each effect; the action's outcome is the join (max)
+  of its effects' outcomes. A command that does not parse becomes one opaque effect.
+- **Unknown vs open.** `unknown` is a value the rules must handle. An *open* fact also lists the
+  candidate values the fact filler may pick, with evidence: uncatalogued targets (sensitivity, never
+  below a known floor), a target only an observation named (observed vs untrusted_instruction), a
+  code change no path rule knows (security relevance). Unknowns that only running the program can
+  settle (opaque code, unresolved selectors) stay closed for the sandbox. Cited authorization and
+  the residual-risk flag are open on demand, when the rules' result calls for them.
+- **Fills.** The filler's answers go back into `build_facts` as fills, which must answer an open
+  fact within its candidates. Derived facts are recomputed (the envelope, a later egress's payload),
+  and a cited quote is checked verbatim (whitespace-normalized, at least 8 characters) against
+  trusted user turns. The model can lower trust (observed → untrusted_instruction), never raise it.
+- **Catalogs** (`dmgate.facts.catalog`): sensitivity from the registry attribute, then admin path
+  rules, then built-in path rules (first match, exceptions first: `.env.example` before `.env`),
+  then a per-kind default. Protected: registry attribute, git internals, system paths, and the root,
+  home and working directory themselves. Security relevance by path (CI, deps, auth, network) and
+  permission commands. Secret detectors (AWS keys, private keys, GitHub/Slack/API tokens, JWTs,
+  bearer headers) mark literal secrets written into a command as S3 payload.
+- **Provenance** is matched by name: a target counts as named by a segment when one of its names
+  (id, path, basename, registry name/key) stands alone in it. Trusted user turns give `user`, other
+  trusted segments `trusted_structure`, a document the user pointed to `delegated`, other untrusted
+  segments `observed`, nothing (or only the agent's own words) `agent_generated`. Per effect, the
+  least trusted target counts.
+- **Data flows** come from the resolver (pipes, redirects, uploads; `cmd < file` included) and are
+  closed transitively. A read's sink is where its data ends up; a write or egress carries the
+  sensitivity of everything flowing in.
+- **Session ledger** (`dmgate.facts.ledger`): reads of S2+ data, recorded only for actions that ran.
+  Handles join it in P3.
+
+The M2 choices that go beyond the agreed design are listed for review in Q10.
 
 ### 6.5 LLM fact filler
 
@@ -330,17 +373,18 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
 | P4 | Lifecycle: abductive loop, GEPA, LoRA, patch promotion | E4, E5 |
 | P5 | FS/DB benchmark release, demo UI (decision-trace viewer), write-up | — |
 
-Status: **P0 and M1 done (2026-10-26)**, rebuilt in this repository from the first prototype
-(`C:\Users\adria\OneDrive\Desktop\Huawei Challenge`, kept as reference only). P0: record schema,
-gate interface, scoring, exact and clustered CIs, reports, harness CLI, AmPermBench probe set.
-M1: effect resolver. 60 tests.
+Status: **P0 and M1 done (2026-10-26), M2 done (2026-10-27).** P0 and M1 were rebuilt in this
+repository from the first prototype (`C:\Users\adria\OneDrive\Desktop\Huawei Challenge`, kept as
+reference only). P0: record schema, gate interface, scoring, exact and clustered CIs, reports,
+harness CLI, AmPermBench probe set. M1: effect resolver. M2: contract model, fact schema, catalogs,
+session ledger, fact builder; `explain` prints the facts. 160 tests.
 
 ### P1 milestones
 
 | # | Milestone | Validation | Needs from user |
 |---|---|---|---|
 | M1 ✅ | Effect model, resource registry, shell resolver (tree-sitter-bash) | Resolved targets equal ground truth on all 2,560 probe commands (parser correctness, not tuning) | — |
-| M2 | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact | — |
+| M2 ✅ | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact; with the oracle's contract, `targets_in_contract` reproduces all 2,560 probe labels (plumbing, not tuning) | — |
 | M3 | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor | OK to download the OPA binary |
 | M4 | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests | — |
 | M5 | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact | AutoDL endpoint, GPU type (Q6) |
@@ -368,6 +412,7 @@ M1: effect resolver. 60 tests.
 | Q7 | Agent model for OpenHands: open model on AutoDL or an API model? | Deployment |
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
+| Q10 | M2 choices made while building, awaiting review: (a) one fact record per effect, action outcome = join; (b) schema extensions: `unresolved` fact, `unknown` values for sensitivity / sink / volume / security change, `none` sink, residual-risk categories; (c) write grants last the session; (d) unknown sensitivity counts as S3 in the envelope check; (e) `session_chain` counts only reads known to be S2+; (f) `volume` bucket edges (3 / 20, ×4 of the expectation) are placeholders until M4; (g) the built-in path catalog; (h) AmPermBench catalog says its resources are S1, and its admin profile allows the git remote `origin` | M2 |
 
 ## 12. Decision log
 
@@ -385,6 +430,7 @@ M1: effect resolver. 60 tests.
 | 2026-10-26 | P0 done; Q9 adopted: FS/DB dev benchmark v0 and OpenHands AmPermBench runs move into P1 |
 | 2026-10-26 | Restart in `C:\Users\adria\Projects\dmgate` (outside OneDrive, private GitHub backup). Prototype kept as reference |
 | 2026-10-26 | Build mode: Claude builds each milestone, then teaches it to the user with exercises. P0 and M1 rebuilt here first |
+| 2026-10-27 | M2 built (user asked to skip ahead from the lessons). Its own choices are open for review as Q10 |
 
 ## 13. References
 

@@ -2,7 +2,8 @@
 and how every possible gate outcome would score.
 
 A teaching and debugging aid. The ground truth is printed for the human reader; it never reaches a
-gate. Example:
+gate. The FACTS section uses the oracle's contract as a stand-in for the M5 compiler, for the same
+reader. Example:
 
     python -m dmgate.explain --prompt CA-S2-B2-R0 --command "aws s3 rm s3://bench-artifacts/dev/alex/ --recursive"
 """
@@ -13,10 +14,13 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from dmgate.datasets.ampermbench import FAMILIES, FamilyData, default_root, environment_for, load_family
+from dmgate.datasets.ampermbench import (
+    FAMILIES, FamilyData, default_root, environment_for, load_family, oracle_contract,
+)
 from dmgate.effects import STATE_CHANGING, resolve_shell
+from dmgate.facts.builder import build_facts
 from dmgate.outcomes import Decision, Outcome
-from dmgate.records import Label
+from dmgate.records import Action, GateInput, Label, Segment, Trust
 from dmgate.scoring import score
 
 
@@ -37,7 +41,8 @@ def _ids(items: frozenset[str] | set[str]) -> str:
 
 def explain(prompt_id: str, command: str, root: Path | None = None) -> str:
     data, prompt, authorized = find_prompt(prompt_id, root)
-    resolution = resolve_shell(command, environment_for(data))
+    environment = environment_for(data)
+    resolution = resolve_shell(command, environment)
     out = [
         f"PROMPT {prompt_id}  family={data.family}  S={prompt['s_axis']} B={prompt['b_axis']} R={prompt['r_axis']}",
         f"  {prompt['prompt']}",
@@ -62,6 +67,26 @@ def explain(prompt_id: str, command: str, root: Path | None = None) -> str:
         out.append("  data flows: " + ", ".join(f"[{a}]->[{b}]" for a, b in resolution.flows))
     if resolution.parse_error:
         out.append("  WARNING: the command did not parse cleanly")
+
+    out += ["", "FACTS (M2 builder; contract = the oracle's stand-in until the M5 compiler, never given to a gate)"]
+    context = (
+        Segment("system", f"Platform user: {data.user}", Trust.TRUSTED),
+        Segment("user", prompt["prompt"], Trust.TRUSTED),
+    )
+    request = GateInput(prompt_id, context, Action("bash", {"command": command}), environment)
+    facts = build_facts(request, resolution, oracle_contract(data, prompt_id))
+    for record in facts.effects:
+        out.append(f"  [{record.index}] {record.effect.verb.value} {record.effect.kind}")
+        gaps = record.gaps()
+        for name, fact in record.facts.items():
+            line = f"      {name:<25} {str(fact.value):<16} {fact.source}"
+            if fact.evidence:
+                line += f" | {fact.evidence[0]}"
+            if name in gaps:
+                line += f" | open: {', '.join(gaps[name])}"
+            out.append(line if len(line) <= 150 else line[:147] + "...")
+    if not facts.effects:
+        out.append("  (no effects, so no facts)")
 
     changing = [e for e in resolution.effects if e.verb in STATE_CHANGING]
     targets = resolution.changed()

@@ -17,6 +17,12 @@ class Verb(str, Enum):
 
 STATE_CHANGING = frozenset({Verb.WRITE, Verb.DELETE, Verb.CONTROL})
 
+# Notes the fact builder relies on. Other notes are for human readers only.
+LISTING = "listing"  # reads names, not contents (ls, tree, du, find)
+RECURSIVE = "recursive"  # a file delete that reaches everything below the target
+SENDS_DATA = "sends data"  # egress with a payload (curl -d, scp, ...)
+SENDS_REPOSITORY = "sends repository data"  # git push: the payload is the repository
+
 
 @dataclass(frozen=True)
 class Effect:

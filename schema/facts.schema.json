@@ -1,0 +1,164 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DMGate rule input: one fact record per effect of an action",
+  "type": "object",
+  "properties": {
+    "record_id": {
+      "type": "string"
+    },
+    "effects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "description": "The effect's verb.",
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "delete",
+              "control",
+              "egress",
+              "exec"
+            ]
+          },
+          "opaque": {
+            "description": "The program's behavior cannot be seen before it runs (interpreter, script, eval, unparsed command).",
+            "type": "boolean"
+          },
+          "unresolved": {
+            "description": "Some selector of the effect could not be resolved to concrete targets.",
+            "type": "boolean"
+          },
+          "max_sensitivity": {
+            "description": "Highest sensitivity of the data the effect touches, or carries for writes and egress.",
+            "type": "string",
+            "enum": [
+              "S0",
+              "S1",
+              "S2",
+              "S3",
+              "unknown"
+            ]
+          },
+          "targets_in_contract": {
+            "description": "How many of the effect's targets the contract covers. Unresolved selectors never count as covered.",
+            "type": "string",
+            "enum": [
+              "all",
+              "some",
+              "none"
+            ]
+          },
+          "has_protected_target": {
+            "description": "Some resolved target is protected.",
+            "type": "boolean"
+          },
+          "envelope_permits": {
+            "description": "An active grant covers this verb, kind, sensitivity (unknown counts as S3) and sink.",
+            "type": "boolean"
+          },
+          "provenance": {
+            "description": "The least trusted origin among the effect's targets: where each was first named.",
+            "type": "string",
+            "enum": [
+              "user",
+              "trusted_structure",
+              "delegated",
+              "observed",
+              "agent_generated",
+              "untrusted_instruction"
+            ]
+          },
+          "sink_class": {
+            "description": "Where the data ends up.",
+            "type": "string",
+            "enum": [
+              "none",
+              "context",
+              "local",
+              "remote_allowlisted",
+              "remote_other",
+              "recipient_named",
+              "recipient_unnamed",
+              "unknown"
+            ]
+          },
+          "volume": {
+            "description": "How much the effect touches.",
+            "type": "string",
+            "enum": [
+              "small",
+              "large",
+              "bulk",
+              "unknown"
+            ]
+          },
+          "session_chain": {
+            "description": "This egress follows a read of S2+ data in the same session.",
+            "type": "string",
+            "enum": [
+              "none",
+              "sensitive_read_then_egress"
+            ]
+          },
+          "security_relevant_change": {
+            "description": "The write changes authentication, CI, permissions, network setup or dependencies.",
+            "type": "string",
+            "enum": [
+              "none",
+              "auth",
+              "ci",
+              "permissions",
+              "network",
+              "deps",
+              "unknown"
+            ]
+          },
+          "cited_authorization": {
+            "description": "A quoted span of a trusted user turn authorizes this effect. Lowers soft rules only.",
+            "type": "string",
+            "enum": [
+              "none",
+              "verified"
+            ]
+          },
+          "residual_risk_flag": {
+            "description": "A risk no other fact captured. Escalates to Ask only, alongside a risk fact.",
+            "type": "string",
+            "enum": [
+              "none",
+              "sensitive",
+              "destructive",
+              "egress",
+              "untrusted_provenance"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "opaque",
+          "unresolved",
+          "max_sensitivity",
+          "targets_in_contract",
+          "has_protected_target",
+          "envelope_permits",
+          "provenance",
+          "sink_class",
+          "volume",
+          "session_chain",
+          "security_relevant_change",
+          "cited_authorization",
+          "residual_risk_flag"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "record_id",
+    "effects"
+  ],
+  "additionalProperties": false
+}

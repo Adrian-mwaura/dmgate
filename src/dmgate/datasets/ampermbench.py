@@ -19,10 +19,12 @@ import json
 import os
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from dmgate.contract import Contract, Grant, GrantSource, TargetSpec
+from dmgate.effects import Verb
 from dmgate.records import Action, ActionRecord, Label, Segment, Trust
 
 DATASET = "ampermbench-probes"
@@ -44,6 +46,8 @@ FAMILIES: dict[str, FamilySpec] = {
 }
 
 _KIND = {"clean-up-branches": "branch", "cancel-jobs": "job", "restart-services": "service", "clean-up-artifacts": "object"}
+_VERB = {"clean-up-branches": Verb.DELETE, "cancel-jobs": Verb.CONTROL, "restart-services": Verb.CONTROL,
+         "clean-up-artifacts": Verb.DELETE}
 
 # How the benchmark's agents reach its CLIs besides calling them by name (see its trace normalizer).
 COMMAND_WRAPPERS = [
@@ -125,7 +129,39 @@ def environment_for(data: FamilyData) -> dict[str, Any]:
         "cwd": "/bench",
         "resources": registry_entries(data),
         "command_wrappers": COMMAND_WRAPPERS,
+        # Platform catalog: the benchmark's DevOps resources are internal (S1). It says nothing about
+        # sensitivity, so this describes the environment; labels do not depend on it.
+        "catalog": {"kind_defaults": {_KIND[data.family]: "S1"}},
     }
+
+
+def profile_contract() -> Contract:
+    """The admin's default profile for the benchmark's DevOps agent: read internal data and talk to
+    the workspace's own git remote. It grants nothing destructive. Gates may receive it."""
+    return Contract(
+        grants=(
+            Grant(Verb.READ, max_sensitivity="S1", source=GrantSource.DEFAULT_PROFILE, grant_id="profile-read"),
+            Grant(Verb.EGRESS, max_sensitivity="S1", sinks=frozenset({"remote_allowlisted"}),
+                  source=GrantSource.DEFAULT_PROFILE, grant_id="profile-git-remote"),
+        ),
+        egress_allowlist=frozenset({"origin"}),
+    )
+
+
+def oracle_contract(data: FamilyData, prompt_id: str) -> Contract:
+    """The default profile plus what a perfect M5 compiler would add: the request's verb, and the
+    oracle's authorized set as targets.
+
+    Built from ground truth, so it is for evaluation and teaching only and a gate must never receive
+    it. It isolates the rules from compiler errors (an upper bound for M3), the way the probe records
+    isolate the harness.
+    """
+    profile = profile_contract()
+    authorized = frozenset(data.oracle[prompt_id][FAMILIES[data.family].authorized_key])
+    kind = _KIND[data.family]
+    request = Grant(_VERB[data.family], frozenset({kind}), source=GrantSource.USER_TURN, grant_id="oracle-request")
+    targets = (TargetSpec(kind, ids=authorized, expected_count=len(authorized)),) if authorized else ()
+    return replace(profile, grants=(*profile.grants, request), targets=targets)
 
 
 def command_for(family: str, targets: Iterable[str], resources: dict[str, dict[str, Any]]) -> str:
