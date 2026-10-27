@@ -28,7 +28,7 @@ from dmgate.datasets import fsdb
 from dmgate.effects import Registry
 from dmgate.facts.catalog import Catalog
 from dmgate.facts.schema import SENSITIVITY
-from dmgate.llm.client import CachedClient, LLMClient, OpenAIClient
+from dmgate.llm.client import STRUCTURED_MODES, CachedClient, LLMClient, OpenAIClient, smoke_check
 from dmgate.llm.compiler import ContractCompiler
 from dmgate.llm.filler import FactFiller
 from dmgate.records import Segment, Trust
@@ -125,8 +125,14 @@ def sensitivity_report(filler: FactFiller, items: list[tuple[str, str, str]]) ->
 
 
 def client_from_args(base_url: str, model: str, *, api_key: str | None, structured: str,
-                     extra_body: dict[str, Any] | None, cache: Path | None) -> LLMClient:
-    client: LLMClient = OpenAIClient(base_url, model, api_key=api_key, structured=structured, extra_body=extra_body)
+                     extra_body: dict[str, Any] | None, cache: Path | None, check: bool = True) -> LLMClient:
+    """An endpoint client, smoke-checked first (uncached) so a server that ignores schemas is caught."""
+    client = OpenAIClient(base_url, model, api_key=api_key, structured=structured, extra_body=extra_body)
+    if check:
+        ok, message = smoke_check(client)
+        if not ok:
+            raise SystemExit(f"smoke check failed: {message}")
+        print(f"smoke check: {message}")
     return CachedClient(client, cache) if cache is not None else client
 
 
@@ -139,10 +145,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--base-url", default=os.environ.get("DMGATE_LLM_BASE_URL"), help="e.g. http://127.0.0.1:8000/v1")
     parser.add_argument("--model", default=os.environ.get("DMGATE_LLM_MODEL"))
     parser.add_argument("--api-key-env", default="DMGATE_LLM_API_KEY", help="name of the variable holding the key")
-    parser.add_argument("--structured", choices=("response_format", "guided_json"), default="response_format")
+    parser.add_argument("--structured", choices=STRUCTURED_MODES,
+                        default=os.environ.get("DMGATE_LLM_STRUCTURED", "response_format"))
     parser.add_argument("--extra-body", default=os.environ.get("DMGATE_LLM_EXTRA_BODY"),
                         help='JSON merged into each request, e.g. {"chat_template_kwargs": {"enable_thinking": false}}')
-    parser.add_argument("--task", default="compiler,sensitivity")
+    parser.add_argument("--task", default="compiler,sensitivity", help="smoke, compiler, sensitivity (comma-separated)")
     parser.add_argument("--families", default="", help="comma-separated family codes (FL,FR,FS,DD,DU,DQ); default all")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--out", type=Path, default=None)
@@ -155,6 +162,8 @@ def main(argv: list[str] | None = None) -> None:
                               extra_body=json.loads(args.extra_body) if args.extra_body else None,
                               cache=None if args.no_cache else default_cache(args.model))
     tasks = set(args.task.split(","))
+    if tasks == {"smoke"}:
+        return
     families = set(filter(None, args.families.split(",")))
     out = args.out or Path("results") / f"{datetime.now():%Y%m%d-%H%M%S}-llm-eval"
     out.mkdir(parents=True, exist_ok=True)

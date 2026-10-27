@@ -11,7 +11,7 @@ from dmgate.datasets import fsdb
 from dmgate.effects import Verb
 from dmgate.facts.builder import build_facts
 from dmgate.harness import make_gate, run
-from dmgate.llm.client import CachedClient, LLMError, OpenAIClient, ScriptedClient
+from dmgate.llm.client import CachedClient, LLMError, OpenAIClient, ScriptedClient, smoke_check
 from dmgate.llm.compiler import OUTPUT_SCHEMA, ContractCompiler, describe_resources, grounded, to_contract
 from dmgate.llm.evaluate import compiler_report, sensitivity_items, sensitivity_report
 from dmgate.llm.filler import FactFiller, FillerConfig
@@ -82,8 +82,19 @@ def test_client_asks_vllm_for_schema_constrained_json(stub):
                                                                               "strict": True}}
     assert body["n"] == 3 and body["seed"] == 7 and body["chat_template_kwargs"] == {"enable_thinking": False}
     assert completion.outputs == ({"level": "S1"}, None, None)  # out of the enum, not JSON: never guessed at
-    OpenAIClient(stub, "m", structured="guided_json").complete_json([], SCHEMA)
-    assert _Stub.seen[1][2]["guided_json"] == SCHEMA and "response_format" not in _Stub.seen[1][2]
+    OpenAIClient(stub, "m", structured="structured_outputs").complete_json([], SCHEMA)
+    assert _Stub.seen[1][2]["structured_outputs"] == {"json": SCHEMA} and "response_format" not in _Stub.seen[1][2]
+    with pytest.raises(ValueError, match="removed in vLLM 0.12"):
+        OpenAIClient(stub, "m", structured="guided_json")
+
+
+def test_the_smoke_check_catches_a_server_that_ignores_the_schema(stub):
+    _Stub.reply = {"model": "m", "choices": [{"message": {"content": '{"answer": "no"}'}}]}
+    ok, message = smoke_check(OpenAIClient(stub, "m"))
+    assert not ok and "did not enforce" in message
+    _Stub.reply = {"model": "m", "choices": [{"message": {"content": '{"answer": "yes"}'}}]}
+    assert smoke_check(OpenAIClient(stub, "m"))[0]
+    assert not smoke_check(OpenAIClient("http://127.0.0.1:9/v1", "m", timeout=2))[0]
 
 
 def test_client_errors(stub):
@@ -102,6 +113,14 @@ def test_cache_replays_exact_requests(tmp_path):
     assert first.outputs == again.outputs and again.cached and len(inner.calls) == 1
     cache.complete_json([{"role": "user", "content": "other"}], SCHEMA)
     assert len(inner.calls) == 2
+
+
+def test_the_cache_keeps_request_settings_apart(tmp_path, stub):
+    _Stub.reply = {"model": "m", "choices": [{"message": {"content": '{"level": "S0"}'}}]}
+    path = tmp_path / "c.jsonl"
+    CachedClient(OpenAIClient(stub, "m"), path).complete_json([], SCHEMA)
+    CachedClient(OpenAIClient(stub, "m", structured="structured_outputs"), path).complete_json([], SCHEMA)
+    assert len(_Stub.seen) == 2  # a different structured mode is a different request
 
 
 # -- compiler -------------------------------------------------------------------------------------

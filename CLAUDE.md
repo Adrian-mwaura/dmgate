@@ -55,8 +55,10 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 ```
 
 The LLM endpoint comes from `DMGATE_LLM_BASE_URL`, `DMGATE_LLM_MODEL` (optional
-`DMGATE_LLM_API_KEY`, `DMGATE_LLM_EXTRA_BODY`, `DMGATE_LLM_STRUCTURED`). Answers are cached in
-`results/llm-cache/` so runs replay; record model, vLLM version and GPU with every number.
+`DMGATE_LLM_API_KEY`, `DMGATE_LLM_EXTRA_BODY`, `DMGATE_LLM_STRUCTURED` = `response_format` or
+`structured_outputs`). The GPU is an AutoDL RTX 4090 (24 GB) running vLLM 0.31.0; `docs/DEPLOY.md`
+has the steps. Answers are cached in `results/llm-cache/` so runs replay; record model, vLLM
+version and GPU with every number.
 
 OPA 1.21.2 lives in `tools/opa/` (not committed; tests that need it skip without it). Download it
 and compare the hash with the published `.sha256` file before first use:

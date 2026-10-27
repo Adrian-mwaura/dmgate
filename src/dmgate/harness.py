@@ -77,7 +77,8 @@ def _rule_gate(name: str, records: list[ActionRecord]) -> Gate:
     rules-oracle-contract: the profile plus the oracle's authorized set (an upper bound that isolates
     the rules from compiler errors; built from ground truth, so never reported as a result).
     rules-llm: the full pipeline: the M5 compiler and fact filler on the model at DMGATE_LLM_BASE_URL
-    (DMGATE_LLM_MODEL; optional DMGATE_LLM_API_KEY, DMGATE_LLM_EXTRA_BODY), answers cached on disk.
+    (DMGATE_LLM_MODEL; optional DMGATE_LLM_API_KEY, DMGATE_LLM_EXTRA_BODY, DMGATE_LLM_STRUCTURED),
+    smoke-checked first, answers cached on disk.
     """
     from dmgate.datasets import ampermbench, fsdb
     from dmgate.rules.gate import RuleGate

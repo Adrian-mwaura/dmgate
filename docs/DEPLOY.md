@@ -11,88 +11,130 @@ with vLLM on an AutoDL GPU and reaches it from the Windows machine through an SS
 - **Structured outputs.** When a request carries `response_format: {"type": "json_schema", ...}`,
   vLLM restricts which tokens the model may produce at each step, so the answer is always JSON
   that fits the schema. The gate relies on this: every model answer is an enum or a quoted span.
+  The gate's client checks every answer against the schema again, and `dmgate-llm-eval` runs a
+  **smoke check** first: it asks for `"no"` while the schema allows only `"yes"`, so a server that
+  silently ignores schemas is caught before any number is measured.
 - **AutoDL** rents GPU machines by the hour. You get a Linux box with SSH access; nothing on it is
   reachable from outside except SSH.
 - **SSH tunnel.** `ssh -L 8000:127.0.0.1:8000 ...` makes port 8000 on your Windows machine forward
   to port 8000 on the GPU machine, through the encrypted SSH connection. vLLM listens only on the
   GPU machine's own loopback address, so nothing is exposed to the internet.
 
-## Choosing a card and a model
+## Memory, in one rule
 
-Weights in bf16 take about 2 bytes per parameter; the attention cache needs room on top.
+Weights in bf16 take about 2 bytes per parameter, in FP8 about 1; the attention cache needs room
+on top. vLLM takes `--gpu-memory-utilization` of the card (0.90 here) and gives what the weights
+leave over to the attention cache.
 
-| Model size | Weights (bf16) | Fits on |
-|---|---|---|
-| ~4B | ~8 GB | any 24 GB card (RTX 3090/4090) |
-| ~8B | ~16 GB | a 24 GB card, with a modest context length |
-| ~14B | ~28 GB | 40-48 GB cards, or a 24 GB card with 4-bit AWQ/GPTQ weights |
-| ~32B | ~64 GB | 80 GB cards (A100/H800), or 4-bit weights on a 40-48 GB card |
+## This project's machine: RTX 4090, 24 GB
 
-The challenge asks for the smallest model that works, and experiment E7 measures a size ladder.
-Start with a small instruct model that vLLM supports with structured outputs (for example a
-4B-8B Qwen3 instruct model, or openPangu-Embedded-7B), then climb. Check each model card for
-its exact id, licence and vLLM support before downloading.
+AutoDL Inner Mongolia zone B: RTX 4090 (24 GB), 16-core Xeon Gold 6430, 120 GB RAM, 30 GB system
+disk, 50 GB data disk, driver 595.71 (CUDA up to 13.2; vLLM's own CUDA 12.x build runs on it).
 
-## On the AutoDL machine
+**Model ladder on this card** (experiment E7; start at the bottom, climb only if accuracy needs it):
 
-1. Create an instance with a PyTorch/CUDA image. The console shows the SSH host, port and password.
-   Put models on the data disk (`/root/autodl-tmp`), not the small system disk.
-2. If downloads from Hugging Face are slow, turn on AutoDL's academic network acceleration
-   (`source /etc/network_turbo`) or use a mirror (`export HF_ENDPOINT=https://hf-mirror.com`), or
-   load from ModelScope (`export VLLM_USE_MODELSCOPE=True`).
-3. Install vLLM in its own environment and write the version down with the results:
+| Rung | Model | Parameters | Serve as | GPU memory for weights |
+|---|---|---|---|---|
+| 1 | `Qwen/Qwen3.5-4B` (Apache-2.0) | 4.7B | bf16, `--language-model-only` | ~9.3 GB |
+| 2 | `openpangu/openPangu-Embedded-7B-V1.1` (Huawei; OPENPANGU MODEL LICENSE 1.0) | 8.0B | bf16 | ~16 GB |
+| 3 | `Qwen/Qwen3.5-9B` (Apache-2.0) | 9.7B | `QUANT=fp8`, `--language-model-only` | ~10 GB |
+
+- Qwen3.5 models are vision-language models; `--language-model-only` skips the vision encoder and
+  frees memory for the attention cache. They think out loud by default; the extra body below turns
+  that off.
+- openPangu's card documents `transformers` and Ascend NPUs, not vLLM on NVIDIA GPUs. Check that it
+  loads (`vllm serve` may need `--trust-remote-code`) and read its licence before using it.
+- Larger rungs (27B and up) need a second card or 4-bit weights; they come later.
+
+**Disk budget (50 GB data disk):** the vLLM environment ~10 GB, Qwen3.5-4B ~9.3 GB, openPangu-7B
+~16 GB, Qwen3.5-9B ~19 GB (FP8 is computed at load time from the bf16 download). Keep at most two
+models at a time; delete one (`rm -rf /root/autodl-tmp/modelscope/...`) or expand the disk before
+the next.
+
+## Step by step
+
+### On the AutoDL machine
+
+Open a terminal (AutoDL's JupyterLab terminal, or `ssh -p <port> root@<host>` from PowerShell).
+
+1. Check the card and pick the network route. AutoDL's academic acceleration helps if your region
+   offers it; ModelScope hosts the same Qwen weights inside China:
 
    ```bash
-   python -m venv /root/autodl-tmp/vllm-env && source /root/autodl-tmp/vllm-env/bin/activate
-   pip install vllm
+   nvidia-smi
+   source /etc/network_turbo   # only if this file exists on your instance
+   ```
+
+2. Install vLLM 0.31.0 (pinned: two weeks older than the newest release) on the data disk:
+
+   ```bash
+   cd /root/autodl-tmp
+   python3 -m venv vllm-env && source vllm-env/bin/activate
+   pip install "vllm==0.31.0" modelscope
    vllm --version
    ```
 
-4. Serve the model (the repository's `scripts/serve_vllm.sh` wraps this):
-
-   ```bash
-   MODEL=Qwen/Qwen3-8B PORT=8000 bash scripts/serve_vllm.sh
-   ```
-
-   It listens on 127.0.0.1 only. Leave it running (inside `tmux` or `screen`, so it survives the
-   SSH session).
-
-## On the Windows machine
-
-1. Open the tunnel and leave the window open (Windows 10/11 ship an OpenSSH client):
+3. Copy the serve script over. From PowerShell on Windows, in the project folder:
 
    ```powershell
-   ssh -N -L 8000:127.0.0.1:8000 -p <port> root@<autodl-host>
+   scp -P <port> scripts/serve_vllm.sh root@<host>:/root/autodl-tmp/
    ```
 
-2. Check the endpoint answers:
+4. Serve rung 1 inside `tmux`, so it keeps running when you disconnect (`Ctrl-b` then `d` to
+   detach, `tmux attach -t vllm` to come back):
+
+   ```bash
+   tmux new -s vllm
+   source /root/autodl-tmp/vllm-env/bin/activate
+   export VLLM_USE_MODELSCOPE=True
+   MODEL=Qwen/Qwen3.5-4B EXTRA_ARGS="--language-model-only" bash /root/autodl-tmp/serve_vllm.sh
+   ```
+
+   The first start downloads the weights. It is ready when the log says the server is running on
+   `http://127.0.0.1:8000`.
+
+### On the Windows machine
+
+1. Open the tunnel in its own PowerShell window and leave it open:
+
+   ```powershell
+   ssh -N -L 8000:127.0.0.1:8000 -p <port> root@<host>
+   ```
+
+2. In another window, check the endpoint answers:
 
    ```powershell
    curl.exe http://127.0.0.1:8000/v1/models
    ```
 
-3. Point the gate at it. Qwen3 models think out loud by default; the extra body turns that off,
-   which the gate's short structured answers do not need:
+3. Point the gate at it:
 
    ```powershell
    $env:DMGATE_LLM_BASE_URL = "http://127.0.0.1:8000/v1"
-   $env:DMGATE_LLM_MODEL = "Qwen/Qwen3-8B"
+   $env:DMGATE_LLM_MODEL = "Qwen/Qwen3.5-4B"
    $env:DMGATE_LLM_EXTRA_BODY = '{"chat_template_kwargs": {"enable_thinking": false}}'
    ```
 
-4. Measure the LLM layer on the FS/DB dev benchmark, then the whole gate:
+4. Smoke check, then the per-fact measurements, then the whole gate:
 
    ```powershell
+   .\.venv\Scripts\dmgate-llm-eval.exe --task smoke
    .\.venv\Scripts\dmgate-llm-eval.exe --task compiler,sensitivity
    .\.venv\Scripts\dmgate-eval.exe --dataset fsdb-dev-probes --gate rules-llm
    ```
 
 Every answer is cached in `results/llm-cache/<model>.jsonl` (not committed), keyed by the exact
-request, so a rerun replays the same answers and costs no GPU time. Delete the file to ask again.
+request and the request settings, so a rerun replays the same answers and costs no GPU time.
+Delete the file to ask again.
+
+To climb a rung, stop the server (`Ctrl-c` in the tmux window), start the next model, and change
+`DMGATE_LLM_MODEL`; for Qwen3.5-9B add `QUANT=fp8`.
 
 ## Rules
 
 - AmPermBench is test-only: never put its prompts in exemplars or tune prompts on it.
 - Record the model id, vLLM version, GPU and the date with every reported number.
-- If the server rejects `response_format`, older vLLM versions take `guided_json` instead:
-  `--structured guided_json` for `dmgate-llm-eval`, or `$env:DMGATE_LLM_STRUCTURED = "guided_json"`.
+- If the smoke check fails with `response_format`, try vLLM's own field:
+  `--structured structured_outputs`, or `$env:DMGATE_LLM_STRUCTURED = "structured_outputs"`. The
+  old `guided_json` field was removed in vLLM 0.12 and may be ignored silently, so the client
+  refuses it.
