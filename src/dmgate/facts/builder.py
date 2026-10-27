@@ -66,6 +66,7 @@ class EffectFacts:
     index: int
     effect: Effect
     facts: Mapping[str, Fact]
+    covered: frozenset[str] = frozenset()  # the targets the contract covers: what a Minimize keeps
 
     def values(self) -> dict[str, FactValue]:
         return {name: fact.value for name, fact in self.facts.items()}
@@ -214,7 +215,7 @@ class _Builder:
                 "opaque": Fact(e.opaque, "resolver", (e.note,) if e.opaque and e.note else ()),
                 "unresolved": Fact(bool(e.unresolved), "resolver", e.unresolved),
                 "max_sensitivity": level[i],
-                "targets_in_contract": self._in_contract(e),
+                "targets_in_contract": self._in_contract(e, covered := self._covered(e)),
                 "has_protected_target": self._protected(e),
                 "provenance": self._fill(i, "provenance", self._provenance(e)),
                 "sink_class": self._sink(i),
@@ -230,7 +231,7 @@ class _Builder:
             errors = validate({name: f.value for name, f in ordered.items()})
             if errors:
                 raise AssertionError(f"fact builder produced an invalid record: {errors}")
-            records.append(EffectFacts(i, e, ordered))
+            records.append(EffectFacts(i, e, ordered, covered))
         if self.fills:
             raise ValueError(f"fills for facts that are not open: {sorted(self.fills)}")
         return ActionFacts(self.request.record_id, tuple(records))
@@ -309,17 +310,20 @@ class _Builder:
 
     # -- contract ------------------------------------------------------------------------------
 
-    def _in_contract(self, e: Effect) -> Fact:
+    def _covered(self, e: Effect) -> frozenset[str]:
+        if e.opaque:
+            return frozenset()
+        return frozenset(t for t in e.targets
+                         if self.contract.covering_spec(e.kind, t, self.registry.get(e.kind, t), self.cwd) is not None)
+
+    def _in_contract(self, e: Effect, covered: frozenset[str]) -> Fact:
         if e.opaque:
             return Fact("none", "opaque program: its targets are unknown")
         if not e.targets and not e.unresolved:
             return Fact("all", "no targets")
-        covered, uncovered = [], []
-        for t in sorted(e.targets):
-            spec = self.contract.covering_spec(e.kind, t, self.registry.get(e.kind, t), self.cwd)
-            (covered if spec is not None else uncovered).append(t)
+        uncovered = sorted(e.targets - covered)
         if covered and not uncovered and not e.unresolved:
-            return Fact("all", "contract targets", tuple(covered))
+            return Fact("all", "contract targets", tuple(sorted(covered)))
         evidence = tuple(f"not covered: {t}" for t in uncovered) + tuple(f"unresolved: {s}" for s in e.unresolved)
         return Fact("some" if covered else "none", "contract targets", evidence)
 

@@ -51,13 +51,41 @@ def load_dataset(spec: str) -> list[ActionRecord]:
     raise ValueError(f"unknown dataset {spec!r}; use ampermbench-probes or jsonl:<path>")
 
 
+RULE_GATES = ("rules-profile-only", "rules-oracle-contract")
+
+
 def make_gate(name: str, records: list[ActionRecord]) -> Gate:
     constants = {f"{o.name.lower()}-all": o for o in Outcome}
     if name in constants:
         return ConstantGate(constants[name])
     if name in ("oracle", "oracle-minimize"):
         return OracleGate({r.record_id: r.label for r in records}, minimize=name == "oracle-minimize")
-    raise ValueError(f"unknown gate {name!r}; use one of {sorted(constants)} or oracle, oracle-minimize")
+    if name in RULE_GATES:
+        return _rule_gate(name, records)
+    raise ValueError(f"unknown gate {name!r}; use one of {sorted(constants)}, oracle, oracle-minimize, "
+                     f"or {', '.join(RULE_GATES)}")
+
+
+def _rule_gate(name: str, records: list[ActionRecord]) -> Gate:
+    """The M3 rule gate with a stand-in contract until the M5 compiler exists.
+
+    rules-profile-only: the admin profile alone, no request grants (a lower bound).
+    rules-oracle-contract: the profile plus the oracle's authorized set (an upper bound that isolates
+    the rules from compiler errors; built from ground truth, so never reported as a result).
+    """
+    from dmgate.datasets import ampermbench
+    from dmgate.rules.gate import RuleGate
+
+    if any(r.dataset != ampermbench.DATASET for r in records):
+        raise ValueError(f"{name} needs AmPermBench records: it uses the benchmark's admin profile")
+    if name == "rules-profile-only":
+        profile = ampermbench.profile_contract()
+        return RuleGate(lambda request: profile, name=name, note="lower bound: no request grants")
+    root = ampermbench.default_root()
+    families = {f: ampermbench.load_family(root, f) for f in {r.family for r in records}}
+    contracts = {r.record_id: ampermbench.oracle_contract(families[r.family], r.cluster_id) for r in records}
+    return RuleGate(lambda request: contracts[request.record_id], name=name,
+                    note="upper bound: the contract comes from ground truth; not a result")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -70,7 +98,12 @@ def main(argv: list[str] | None = None) -> None:
 
     records = load_dataset(args.dataset)
     gate = make_gate(args.gate, records)
-    results, decisions = run(gate, records)
+    try:
+        results, decisions = run(gate, records)
+    finally:
+        close = getattr(gate, "close", None)
+        if close is not None:
+            close()
     summary = summarize(results, n_boot=args.n_boot)
 
     out = args.out or Path("results") / f"{datetime.now():%Y%m%d-%H%M%S}-{gate.name}"
@@ -78,10 +111,12 @@ def main(argv: list[str] | None = None) -> None:
     with (out / "results.jsonl").open("w", encoding="utf-8") as handle:
         for result, decision in zip(results, decisions):
             handle.write(json.dumps({**result.to_dict(), "decision": decision}, ensure_ascii=False) + "\n")
-    meta = {"dataset": args.dataset, "gate": gate.name, "n_records": len(records)}
+    meta = {"dataset": args.dataset, "gate": gate.name, "note": getattr(gate, "note", ""), "n_records": len(records)}
     (out / "summary.json").write_text(json.dumps({**meta, **summary}, indent=2, default=str), encoding="utf-8")
 
     print(f"dataset={args.dataset} gate={gate.name} -> {out}")
+    if meta["note"]:
+        print(f"NOTE: {meta['note']}")
     print(format_summary(summary))
 
 

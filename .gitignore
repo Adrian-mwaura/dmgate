@@ -14,3 +14,6 @@ results/
 
 # Third-party checkouts (untrusted; cloned locally, never committed)
 external/
+
+# Downloaded tool binaries (OPA), checksum-verified; never committed
+tools/

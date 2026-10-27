@@ -1,0 +1,147 @@
+{
+  "description": "Soft rules (DESIGN.md §6.6, layer 2). Each row is a box in the fact space: every fact it names must take one of the listed values; facts it does not name are unconstrained. An effect's soft outcome is the most restrictive matching row, or ask when none matches. Written from the design, never tuned on AmPermBench. The lifecycle loop (P4) patches this table; loosening patches need the promotion gate.",
+  "version": "m3-1",
+  "rows": [
+    {
+      "id": "SR-READ",
+      "when": {"op": ["read"], "envelope_permits": [true], "sink_class": ["context", "local", "remote_allowlisted"]},
+      "outcome": "allow",
+      "reason": "read within the envelope"
+    },
+    {
+      "id": "SR-CEILING",
+      "when": {"op": ["read"], "envelope_permits": [false]},
+      "outcome": "ask",
+      "reason": "read above the envelope's sensitivity ceiling (handles arrive in P3)"
+    },
+    {
+      "id": "SR-EXPOSED",
+      "when": {"op": ["read"], "sink_class": ["remote_other", "recipient_unnamed", "unknown"]},
+      "outcome": "ask",
+      "reason": "data read for an unapproved destination"
+    },
+    {
+      "id": "SW-WRITE",
+      "when": {
+        "op": ["write"], "envelope_permits": [true], "has_protected_target": [false],
+        "security_relevant_change": ["none"],
+        "provenance": ["user", "trusted_structure", "delegated", "observed", "agent_generated"]
+      },
+      "outcome": "allow",
+      "reason": "ordinary write within the envelope (reversible in the sandbox)"
+    },
+    {
+      "id": "SW-REQUESTED-SECURITY",
+      "when": {
+        "op": ["write"], "envelope_permits": [true], "has_protected_target": [false],
+        "security_relevant_change": ["auth", "ci", "permissions", "network", "deps"],
+        "targets_in_contract": ["all"],
+        "provenance": ["user", "trusted_structure", "delegated", "observed", "agent_generated"]
+      },
+      "outcome": "allow",
+      "reason": "security-relevant change to files the request names"
+    },
+    {
+      "id": "SW-SECURITY",
+      "when": {
+        "op": ["write"], "security_relevant_change": ["auth", "ci", "permissions", "network", "deps"],
+        "targets_in_contract": ["some", "none"]
+      },
+      "outcome": "ask",
+      "reason": "security-relevant change outside the request"
+    },
+    {
+      "id": "SW-UNREVIEWED",
+      "when": {"op": ["write"], "security_relevant_change": ["unknown"]},
+      "outcome": "ask",
+      "reason": "the change has not been reviewed for security relevance yet"
+    },
+    {
+      "id": "SW-INJECTED",
+      "when": {"op": ["write"], "provenance": ["untrusted_instruction"]},
+      "outcome": "ask",
+      "reason": "write requested by untrusted content"
+    },
+    {
+      "id": "SW-CEILING",
+      "when": {"op": ["write"], "envelope_permits": [false]},
+      "outcome": "ask",
+      "reason": "write outside the envelope"
+    },
+    {
+      "id": "SD-REQUESTED",
+      "when": {
+        "op": ["delete", "control"], "envelope_permits": [true], "targets_in_contract": ["all"],
+        "volume": ["small", "unknown"]
+      },
+      "outcome": "allow",
+      "reason": "destructive operation on exactly what the request names"
+    },
+    {
+      "id": "SD-MORE-THAN-ASKED",
+      "when": {"op": ["delete", "control"], "targets_in_contract": ["all"], "volume": ["large", "bulk"]},
+      "outcome": "ask",
+      "reason": "more targets than the request implies"
+    },
+    {
+      "id": "SD-NARROW",
+      "when": {"op": ["delete", "control"], "envelope_permits": [true], "targets_in_contract": ["some"]},
+      "outcome": "minimize",
+      "reason": "narrowed to the targets the request names"
+    },
+    {
+      "id": "SD-UNREQUESTED",
+      "when": {"op": ["delete", "control"], "targets_in_contract": ["none"]},
+      "outcome": "ask",
+      "reason": "destructive operation on targets the request does not name"
+    },
+    {
+      "id": "SD-NO-GRANT",
+      "when": {"op": ["delete", "control"], "envelope_permits": [false]},
+      "outcome": "ask",
+      "reason": "no destructive permission in force this turn"
+    },
+    {
+      "id": "SE-ALLOWLISTED",
+      "when": {"op": ["egress"], "envelope_permits": [true], "sink_class": ["remote_allowlisted"]},
+      "outcome": "allow",
+      "reason": "egress to an allowlisted destination within the envelope"
+    },
+    {
+      "id": "SE-REQUESTED",
+      "when": {
+        "op": ["egress"], "envelope_permits": [true], "targets_in_contract": ["all"],
+        "sink_class": ["remote_allowlisted", "remote_other", "recipient_named"]
+      },
+      "outcome": "allow",
+      "reason": "egress to a destination the request names"
+    },
+    {
+      "id": "SE-UNREQUESTED",
+      "when": {
+        "op": ["egress"], "targets_in_contract": ["some", "none"],
+        "sink_class": ["remote_other", "recipient_unnamed", "unknown"]
+      },
+      "outcome": "ask",
+      "reason": "egress to a destination the request does not name"
+    },
+    {
+      "id": "SE-NO-GRANT",
+      "when": {"op": ["egress"], "envelope_permits": [false]},
+      "outcome": "ask",
+      "reason": "egress outside the envelope"
+    },
+    {
+      "id": "SX-SANDBOXED",
+      "when": {"op": ["exec"], "envelope_permits": [true]},
+      "outcome": "allow",
+      "reason": "runs in the sandbox and is judged on what it does (P2)"
+    },
+    {
+      "id": "SX-NO-GRANT",
+      "when": {"op": ["exec"], "envelope_permits": [false]},
+      "outcome": "ask",
+      "reason": "running programs is outside the envelope"
+    }
+  ]
+}

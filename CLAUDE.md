@@ -28,6 +28,8 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
   The same holds for `oracle_contract` (built from ground truth): tests and teaching only.
 - The rules read only schema facts (`dmgate.facts.schema`); every fact is always present, and
   `unknown` is a value, not a missing key.
+- Invariants (`policy/rego/invariants.rego`) are admin-owned. Behavior changes go in the soft table
+  (`policy/soft_rules.json`); the composition (`decision.rego`) stays fixed.
 - AmPermBench (and anything derived from it, including the probe set) is test-only: never tune
   prompts, rules or exemplars on it.
 - `external/` holds untrusted third-party checkouts. Read their data files; do not import their
@@ -42,6 +44,19 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 .\.venv\Scripts\dmgate-eval.exe --dataset ampermbench-probes --gate allow-all
 .\.venv\Scripts\python.exe -m dmgate.explain --prompt CA-S2-B2-R0 --command "aws s3 rm s3://bench-artifacts/dev/alex/ --recursive"
 .\.venv\Scripts\python.exe -m dmgate.facts.schema --write   # after changing the fact schema
+.\.venv\Scripts\dmgate-eval.exe --dataset ampermbench-probes --gate rules-oracle-contract
+.\tools\opa\opa.exe check --strict --schema schema\facts.schema.json policy\rego
+.\tools\opa\opa.exe test policy\rego -v
+.\tools\opa\opa.exe fmt -w policy\rego
+```
+
+OPA 1.21.2 lives in `tools/opa/` (not committed; tests that need it skip without it). Download it
+and compare the hash with the published `.sha256` file before first use:
+
+```powershell
+New-Item -ItemType Directory -Force tools\opa
+Invoke-WebRequest https://github.com/open-policy-agent/opa/releases/download/v1.21.2/opa_windows_amd64.exe -OutFile tools\opa\opa.exe
+(Get-FileHash tools\opa\opa.exe -Algorithm SHA256).Hash   # must equal 0089FA7AD8CDEA7FF9E56FF86FA9202462AFB63EF74506E2B547A24B4A987CCB
 ```
 
 AmPermBench data is read from `external/cc-auto-mode-measurement` (override with `AMPERMBENCH_DIR`):

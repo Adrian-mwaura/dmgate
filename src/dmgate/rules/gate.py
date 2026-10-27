@@ -1,0 +1,104 @@
+"""The rule gate: action -> effects (M1) -> facts (M2) -> OPA policy (M3) -> Decision.
+
+The contract comes from a provider. Until the M5 compiler exists, providers are the admin profile
+alone (no request grants: a lower bound) or the benchmark oracle's contract (an upper bound that
+isolates the rules from compiler errors; never a result).
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Callable
+from typing import Any
+
+from dmgate.contract import Contract
+from dmgate.effects import STATE_CHANGING, Effect, Resolution, Verb, resolve_shell
+from dmgate.facts.builder import ActionFacts, build_facts
+from dmgate.outcomes import Decision, Outcome
+from dmgate.records import GateInput
+from dmgate.rules.opa import POLICY_DIR, OpaServer
+from dmgate.rules.soft import SoftTable
+
+ContractProvider = Callable[[GateInput], Contract]
+
+SHELL_TOOLS = frozenset({"bash", "execute_bash", "shell", "terminal"})
+
+
+def resolve_action(request: GateInput) -> Resolution:
+    """Effects of any tool call. Tools without an effect spec yet are opaque (§6.2)."""
+    action = request.action
+    if action.tool in SHELL_TOOLS:
+        return resolve_shell(str(action.args.get("command", "")), request.environment)
+    return Resolution((Effect(Verb.EXEC, "process", frozenset({action.tool}), opaque=True, command=action.tool,
+                              note="no effect spec for this tool yet"),))
+
+
+def policy_version(table: SoftTable) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(POLICY_DIR.glob("*.rego")):
+        if not path.name.endswith("_test.rego"):
+            digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return f"{digest.hexdigest()[:12]}+{table.fingerprint()}"
+
+
+def residual(facts: ActionFacts, effects: list[dict[str, Any]]) -> frozenset[str] | None:
+    """What still executes after a Minimize: the targets of allowed state-changing effects plus the
+    covered targets of minimized ones. None when that cannot be stated (an allowed effect with
+    unresolved or opaque parts), which scores as a failed Minimize (position 1)."""
+    keep: set[str] = set()
+    for record, decided in zip(facts.effects, effects):
+        e = record.effect
+        if e.verb not in STATE_CHANGING:
+            continue
+        if decided["outcome"] == "minimize":
+            keep |= record.covered
+        elif decided["outcome"] == "allow":
+            if e.unresolved or e.opaque:
+                return None
+            keep |= e.targets
+    return frozenset(keep)
+
+
+class RuleGate:
+    def __init__(self, contracts: ContractProvider, *, name: str = "rules", note: str = "",
+                 table: SoftTable | None = None, server: OpaServer | None = None, sandbox: bool = False,
+                 residual_risk_live: bool = False):
+        self.contracts = contracts
+        self.name = name
+        self.note = note
+        self.table = table or SoftTable.load()
+        self.config = {"sandbox": sandbox, "residual_risk_live": residual_risk_live}
+        self.version = policy_version(self.table)
+        self._server = server
+        self._owns_server = server is None
+        self._loaded = False
+
+    def _opa(self) -> OpaServer:
+        if self._server is None:
+            self._server = OpaServer().start()
+        if not self._loaded:
+            self._server.put_data("dmgate/soft", {"rows": self.table.to_data(), "version": self.table.version})
+            self._server.put_data("dmgate/config", self.config)
+            self._loaded = True
+        return self._server
+
+    def decide(self, request: GateInput) -> Decision:
+        contract = self.contracts(request)
+        facts = build_facts(request, resolve_action(request), contract)
+        result = self._opa().query("dmgate/decision/result", facts.to_input())
+        outcome = Outcome[result["outcome"].upper()]
+        deciding = [d for d in result["effects"] if d["outcome"] == result["outcome"]]
+        reasons = tuple(dict.fromkeys(r for d in deciding for r in d["reasons"]))
+        return Decision(
+            outcome,
+            residual_targets=residual(facts, result["effects"]) if outcome is Outcome.MINIMIZE else None,
+            reasons=reasons or ("no effects",),
+            trace={"policy": self.version, "contract": contract.to_dict(), "facts": facts.trace(),
+                   "rules": result["effects"]},
+        )
+
+    def close(self) -> None:
+        if self._server is not None and self._owns_server:
+            self._server.close()
+            self._server = None
+            self._loaded = False

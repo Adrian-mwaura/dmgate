@@ -241,6 +241,32 @@ fact types:
 Example invariants: S2+ egress to a destination the user never named → ≥ Deny; untrusted-instruction
 provenance with sensitive data, destructive op or egress → ≥ Deny.
 
+Implemented in M3 (`policy/`, `dmgate.rules`; OPA 1.21.2):
+
+- **Invariants** (`policy/rego/invariants.rego`): INV-1 S2+ egress to an unnamed destination → Deny;
+  INV-2 untrusted instruction asking for destructive, egress or sensitive work → Deny; INV-3 delete or
+  control of a protected resource → Deny; INV-4 write to a protected resource → Ask; INV-5 destructive
+  op with unresolved targets → Ask; INV-6 opaque program while the sandbox is off → Ask; INV-7 egress
+  to an unapproved sink after a sensitive read → Ask; INV-8 a secret leaving the platform → Ask;
+  INV-9 data of unknown sensitivity toward an unapproved sink → Ask.
+- **Soft table** (`policy/soft_rules.json`, pushed into OPA as data): each row is a box (fact → allowed
+  values). An effect's soft outcome is the most restrictive matching row, Ask when none matches. So
+  adding a row can only loosen where nothing matched before and its outcome is below Ask; everything
+  else tightens. `dmgate.rules.soft` validates rows against the schema (a misspelled fact would
+  silently never match in Rego) and compares tables exactly: the rows split the fact space into
+  finitely many cells (4,320 for the M3 table, out of 38.7M points) on which every table is constant.
+- **Composition** (`policy/rego/decision.rego`): per effect, `final = max(floor, soft', risk)`, where
+  `soft'` is Allow when the citation is verified and `risk` is Ask when the residual-risk flag is
+  live and corroborated by a risk fact (shadow mode by default). Action outcome = max over effects.
+- **Checks:** `opa check --strict --schema schema/facts.schema.json` (a misspelled fact is a type
+  error), `opa fmt`, Rego unit tests (`opa test`), the floor enumeration (≈12.6k points: even an
+  allow-everything soft table with verified citations ends exactly at `max(floor, risk)`), and a
+  differential test that Rego and Python agree on every cell of the shipped table.
+- **Gate** (`dmgate.rules.gate.RuleGate`): effects → facts → OPA → Decision with reasons and a trace
+  (policy version, contract, facts, per-effect rule results). A Minimize's residual is the covered
+  targets of minimized effects plus the targets of allowed ones; None (a scoring failure) if an
+  allowed state-changing effect has unresolved or opaque parts. About 1 ms per decision.
+
 ### 6.7 Minimize and handles
 
 **Write side:** narrow destructive targets to the authorized subset; project out unneeded columns;
@@ -373,11 +399,21 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
 | P4 | Lifecycle: abductive loop, GEPA, LoRA, patch promotion | E4, E5 |
 | P5 | FS/DB benchmark release, demo UI (decision-trace viewer), write-up | — |
 
-Status: **P0 and M1 done (2026-10-26), M2 done (2026-10-27).** P0 and M1 were rebuilt in this
-repository from the first prototype (`C:\Users\adria\OneDrive\Desktop\Huawei Challenge`, kept as
+Status: **P0 and M1 done (2026-10-26), M2 and M3 done (2026-10-27).** P0 and M1 were rebuilt in
+this repository from the first prototype (`C:\Users\adria\OneDrive\Desktop\Huawei Challenge`, kept as
 reference only). P0: record schema, gate interface, scoring, exact and clustered CIs, reports,
 harness CLI, AmPermBench probe set. M1: effect resolver. M2: contract model, fact schema, catalogs,
-session ledger, fact builder; `explain` prints the facts. 160 tests.
+session ledger, fact builder; `explain` prints the facts. M3: invariants, soft table, composition in
+Rego on an OPA sidecar, box geometry, rule gate. 204 tests.
+
+M3 bounds on the probe set (stand-in contracts until M5; neither is a result):
+
+| Gate | Contract | FPR | FNR |
+|---|---|---|---|
+| `rules-profile-only` | admin profile, no request grants | 100% (320/320 benign asked) | 0% |
+| `rules-oracle-contract` | profile + oracle's authorized set | 0% | 0% |
+
+The gap between the two is the contract compiler's job (M5).
 
 ### P1 milestones
 
@@ -385,7 +421,7 @@ session ledger, fact builder; `explain` prints the facts. 160 tests.
 |---|---|---|---|
 | M1 ✅ | Effect model, resource registry, shell resolver (tree-sitter-bash) | Resolved targets equal ground truth on all 2,560 probe commands (parser correctness, not tuning) | — |
 | M2 ✅ | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact; with the oracle's contract, `targets_in_contract` reproduces all 2,560 probe labels (plumbing, not tuning) | — |
-| M3 | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor | OK to download the OPA binary |
+| M3 ✅ | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor; Rego/Python agreement on every cell | OK to download the OPA binary (given) |
 | M4 | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests | — |
 | M5 | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact | AutoDL endpoint, GPU type (Q6) |
 | M6 | OpenHands runs in AmPermBench task containers (gate log-only) → test records; first end-to-end numbers, E1, E7 | Run coverage across 128 prompts | Agent model choice (Q7) |
@@ -412,7 +448,8 @@ session ledger, fact builder; `explain` prints the facts. 160 tests.
 | Q7 | Agent model for OpenHands: open model on AutoDL or an API model? | Deployment |
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
-| Q10 | M2 choices made while building, awaiting review: (a) one fact record per effect, action outcome = join; (b) schema extensions: `unresolved` fact, `unknown` values for sensitivity / sink / volume / security change, `none` sink, residual-risk categories; (c) write grants last the session; (d) unknown sensitivity counts as S3 in the envelope check; (e) `session_chain` counts only reads known to be S2+; (f) `volume` bucket edges (3 / 20, ×4 of the expectation) are placeholders until M4; (g) the built-in path catalog; (h) AmPermBench catalog says its resources are S1, and its admin profile allows the git remote `origin` | M2 |
+| Q11 | M3 choices made while building, awaiting review: (a) soft outcome = most restrictive matching row, Ask when none matches; (b) a verified citation lowers the soft layer to Allow (not one step); (c) the residual-risk escalation sits beside the floor, so a citation cannot lower it; (d) the nine invariants and twenty soft rows as written; (e) opaque programs are Ask until the sandbox exists (INV-6), then the soft layer allows them for judgment in the sandbox; (f) Minimize narrows within one effect only: an action of separate commands where one is unrequested (`rm a && rm x`) is asked about whole. Dropping such sub-commands belongs with the Minimize executor (P3) | M3 |
+| Q10 | Accepted for now 2026-10-27 (revisit during testing). M2 choices made while building: (a) one fact record per effect, action outcome = join; (b) schema extensions: `unresolved` fact, `unknown` values for sensitivity / sink / volume / security change, `none` sink, residual-risk categories; (c) write grants last the session; (d) unknown sensitivity counts as S3 in the envelope check; (e) `session_chain` counts only reads known to be S2+; (f) `volume` bucket edges (3 / 20, ×4 of the expectation) are placeholders until M4; (g) the built-in path catalog; (h) AmPermBench catalog says its resources are S1, and its admin profile allows the git remote `origin` | M2 |
 
 ## 12. Decision log
 
@@ -431,6 +468,8 @@ session ledger, fact builder; `explain` prints the facts. 160 tests.
 | 2026-10-26 | Restart in `C:\Users\adria\Projects\dmgate` (outside OneDrive, private GitHub backup). Prototype kept as reference |
 | 2026-10-26 | Build mode: Claude builds each milestone, then teaches it to the user with exercises. P0 and M1 rebuilt here first |
 | 2026-10-27 | M2 built (user asked to skip ahead from the lessons). Its own choices are open for review as Q10 |
+| 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
+| 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 
 ## 13. References
 
