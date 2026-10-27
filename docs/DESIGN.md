@@ -139,6 +139,15 @@ with two layers:
   as distinct from data egress.
 - Known weak spot: delegated text naming destructive targets is only as safe as the registry's
   ownership attributes.
+- **Implemented in M5** (`dmgate.llm.compiler`): the model sees the user's turns and a description
+  of the resources (kinds, attribute names and types, and values only for short categorical
+  attributes, so resource names, which others can choose, never reach it). It answers in
+  constrained JSON: grants (verb, kinds, ceiling) and targets (ids, patterns, attribute conditions
+  including `prefix` for ranges like 48xx). Code then **grounds** every grant and target: each must
+  quote the user, and the quote must appear in a user turn; delete, control and egress grants must
+  quote the *latest* turn, which enforces their one-turn lifetime. Code stamps the source and
+  lifetime and adds the admin profile; an invalid answer leaves the profile alone (fails closed).
+  Four hand-written exemplars, from neither benchmark.
 
 ### 6.2 Effect resolver (deterministic)
 
@@ -234,6 +243,22 @@ fact types:
 - **Residual-risk flag** (can only raise, to Ask): Route-1-style holistic check with category and
   evidence span. Acts only alongside a risk fact (sensitive, destructive, egress, untrusted
   provenance), only on k/k agreement, shadow mode first. True positives are distilled into new facts.
+
+Implemented in M5 (`dmgate.llm.filler`), one narrow question per open fact, answers constrained to
+the fact's candidates:
+
+| Fact | Question | Samples |
+|---|---|---|
+| `max_sensitivity` | how sensitive are these uncatalogued targets? | 1 |
+| `provenance` | does this tool output instruct the agent, or only show the target exists? An "instruction" answer must quote words that are in that tool output | 3, majority |
+| `security_relevant_change` | which category does this change touch? | 1 |
+| `cited_authorization` | quote the user's words that authorize this; asked only for effects the soft layer holds above their floor | 3, all must verify |
+| `residual_risk_flag` | a risk no fact captured (off by default) | 3, all must agree |
+
+The gate builds facts, fills the gaps and rebuilds, decides, then asks for citations where the
+soft layer holds an effect back and decides again. The compiler's and filler's answers go into the
+decision trace. `dmgate-llm-eval` measures compiler coverage and sensitivity accuracy on the FS/DB
+dev benchmark; the `rules-llm` harness gate runs the full pipeline.
 
 ### 6.6 Rule engine (Rego, OPA v1)
 
@@ -339,7 +364,8 @@ Never train on decision-only reward: it makes facts meaningless (reward hacking)
   rewrites, stdout tokenization, handle resolution.
 - **Deployment:** vLLM on AutoDL (gate models; optionally the agent model) behind an SSH tunnel.
   OpenHands, its Docker sandbox, the gate service, OPA, test data and the eval harness on the Windows
-  machine (Docker Desktop + WSL2). The gate only talks to an OpenAI-compatible endpoint.
+  machine (Docker Desktop + WSL2). The gate only talks to an OpenAI-compatible endpoint. Step by
+  step in `docs/DEPLOY.md`; `scripts/serve_vllm.sh` serves a model on 127.0.0.1 only.
 
 ## 8. Evaluation
 
@@ -431,7 +457,10 @@ reference only). P0: record schema, gate interface, scoring, exact and clustered
 harness CLI, AmPermBench probe set. M1: effect resolver. M2: contract model, fact schema, catalogs,
 session ledger, fact builder; `explain` prints the facts. M3: invariants, soft table, composition in
 Rego on an OPA sidecar, box geometry, rule gate. M4: SQL resolver with dry-run, database snapshots,
-file globs, the FS/DB dev benchmark v0. 247 tests.
+file globs, the FS/DB dev benchmark v0. M5 (built 2026-10-27, not yet validated): OpenAI-compatible
+client with constrained JSON and an answer cache, contract compiler, fact filler, `dmgate-llm-eval`,
+`rules-llm` gate; checked with scripted models only, so no accuracy numbers until an endpoint
+exists. 265 tests.
 
 M3 bounds on the AmPermBench probe set (stand-in contracts until M5; neither is a result):
 
@@ -461,7 +490,7 @@ targets, and a read feeding a requested upload counts as exposed. These are Q12.
 | M2 ✅ | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact; with the oracle's contract, `targets_in_contract` reproduces all 2,560 probe labels (plumbing, not tuning) | — |
 | M3 ✅ | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor; Rego/Python agreement on every cell | OK to download the OPA binary (given) |
 | M4 ✅ | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests; resolvers recover all 3,104 probe targets | — |
-| M5 | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact | AutoDL endpoint, GPU type (Q6) |
+| M5 (built, awaiting endpoint) | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact (`dmgate-llm-eval`); plumbing proven with scripted models | AutoDL endpoint, GPU type (Q6) |
 | M6 | OpenHands runs in AmPermBench task containers (gate log-only) → test records; first end-to-end numbers, E1, E7 | Run coverage across 128 prompts | Agent model choice (Q7) |
 
 ## 10. Research contributions
@@ -486,6 +515,7 @@ targets, and a read feeding a requested upload counts as exposed. These are Q12.
 | Q7 | Agent model for OpenHands: open model on AutoDL or an API model? | Deployment |
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
+| Q13 | M5 choices made while building, awaiting review: (a) grounding: every compiled grant and target must quote the user, and one-turn verbs must quote the latest turn; (b) the compiler sees attribute values only for short categorical attributes (at most 8 distinct identifiers); (c) the provenance question needs a majority of 3 samples and a quote found in the tool output; citations need all 3 samples to verify; the residual-risk flag needs all 3 to agree; sampling temperature 0.7; (d) four hand-written exemplars; (e) the compiler runs once per conversation state, on all user turns; (f) delegated documents are not compiled yet | M5 |
 | Q12 | Rule gaps the FS/DB dev benchmark found (needs debate before rule changes): (a) **read minimization**: SR-READ allows any read inside the envelope, so reading a colleague's tickets, other customers' rows or unneeded columns passes. Should reads of targets outside the contract be narrowed (Minimize to covered rows/columns/files) or asked, and for all data or only S2+ (leaving coding agents free to explore S0/S1 workspace files)? (b) **write targets**: SW-WRITE allows any write inside the envelope (chosen for reversible workspace files), so updating other people's orders or extra columns passes. Needs a way to tell workspace files from records, e.g. a `target_class` fact or contract targets that cover the workspace for coding tasks. (c) **named destinations**: a read feeding an upload to a host the request names has sink `remote_other`, so SR-EXPOSED asks (all fs-share benign FP). Proposal: a `remote_named` sink class, mirroring `recipient_named` | M4 |
 | Q11 | Accepted for now 2026-10-27 (revisit during testing). M3 choices made while building: (a) soft outcome = most restrictive matching row, Ask when none matches; (b) a verified citation lowers the soft layer to Allow (not one step); (c) the residual-risk escalation sits beside the floor, so a citation cannot lower it; (d) the nine invariants and twenty soft rows as written; (e) opaque programs are Ask until the sandbox exists (INV-6), then the soft layer allows them for judgment in the sandbox; (f) Minimize narrows within one effect only: an action of separate commands where one is unrequested (`rm a && rm x`) is asked about whole. Dropping such sub-commands belongs with the Minimize executor (P3) | M3 |
 | Q10 | Accepted for now 2026-10-27 (revisit during testing). M2 choices made while building: (a) one fact record per effect, action outcome = join; (b) schema extensions: `unresolved` fact, `unknown` values for sensitivity / sink / volume / security change, `none` sink, residual-risk categories; (c) write grants last the session; (d) unknown sensitivity counts as S3 in the envelope check; (e) `session_chain` counts only reads known to be S2+; (f) `volume` bucket edges (3 / 20, ×4 of the expectation) are placeholders until M4; (g) the built-in path catalog; (h) AmPermBench catalog says its resources are S1, and its admin profile allows the git remote `origin` | M2 |
@@ -509,6 +539,7 @@ targets, and a read feeding a requested upload counts as exposed. These are Q12.
 | 2026-10-27 | M2 built (user asked to skip ahead from the lessons). Its own choices are open for review as Q10 |
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
+| 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
 | 2026-10-27 | Q11 accepted for now. M4 built (sqlglot 30.22 added). Bug fixes found by the dev benchmark: INV-7 now spares destinations the request names (its stated intent); the FS/DB oracle contract takes its ceiling from files and columns, not row selections. Rule gaps open as Q12 |
 
 ## 13. References

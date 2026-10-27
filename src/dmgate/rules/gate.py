@@ -1,8 +1,12 @@
-"""The rule gate: action -> effects (M1) -> facts (M2) -> OPA policy (M3) -> Decision.
+"""The rule gate: action -> effects (M1) -> facts (M2) -> LLM fact filler (M5) -> OPA policy (M3).
 
-The contract comes from a provider. Until the M5 compiler exists, providers are the admin profile
-alone (no request grants: a lower bound) or the benchmark oracle's contract (an upper bound that
-isolates the rules from compiler errors; never a result).
+The contract comes from a provider: the M5 compiler (`dmgate.llm.compiler.ContractCompiler`), the
+admin profile alone (no request grants: a lower bound), or the benchmark oracle's contract (an upper
+bound that isolates the rules from compiler errors; never a result).
+
+With a filler, one decision runs: build facts; answer the open facts and rebuild; decide; for
+effects the soft layer holds back (outcome above the floor), ask for a citation, and if one
+verifies, rebuild and decide again. A citation can only lower the soft layer (decision.rego).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from dmgate.effects import Effect, Resolution, Verb, resolve_shell, resolve_sql
 from dmgate.facts.builder import ActionFacts, build_facts
 from dmgate.outcomes import Decision, Outcome
 from dmgate.records import GateInput
+from dmgate.rules.filler_protocol import Filler
 from dmgate.rules.opa import POLICY_DIR, OpaServer
 from dmgate.rules.soft import SoftTable
 
@@ -61,11 +66,15 @@ def residual(facts: ActionFacts, effects: list[dict[str, Any]]) -> frozenset[str
     return frozenset(keep)
 
 
+RANK = {"allow": 0, "minimize": 1, "ask": 2, "deny": 3}
+
+
 class RuleGate:
     def __init__(self, contracts: ContractProvider, *, name: str = "rules", note: str = "",
                  table: SoftTable | None = None, server: OpaServer | None = None, sandbox: bool = False,
-                 residual_risk_live: bool = False):
+                 residual_risk_live: bool = False, filler: Filler | None = None):
         self.contracts = contracts
+        self.filler = filler
         self.name = name
         self.note = note
         self.table = table or SoftTable.load()
@@ -86,17 +95,42 @@ class RuleGate:
 
     def decide(self, request: GateInput) -> Decision:
         contract = self.contracts(request)
-        facts = build_facts(request, resolve_action(request), contract)
+        resolution = resolve_action(request)
+        facts = build_facts(request, resolution, contract)
+        llm_log_start = len(self.filler.log) if self.filler is not None else 0
+        fills = {}
+        if self.filler is not None:
+            fills = {**self.filler.answer_gaps(request, facts)}
+            if fills:
+                facts = build_facts(request, resolution, contract, fills=fills)
+            risks = self.filler.flag_risks(request, facts)
+            if risks:
+                fills |= risks
+                facts = build_facts(request, resolution, contract, fills=fills)
         result = self._opa().query("dmgate/decision/result", facts.to_input())
+        if self.filler is not None:
+            held = [d["effect"] for d in result["effects"] if RANK[d["outcome"]] > RANK[d["floor"]]]
+            reasons_by_effect = {d["effect"]: d["reasons"] for d in result["effects"]}
+            citations = self.filler.cite(request, facts, held, reasons_by_effect) if held else {}
+            if citations:
+                fills |= citations
+                facts = build_facts(request, resolution, contract, fills=fills)
+                result = self._opa().query("dmgate/decision/result", facts.to_input())
         outcome = Outcome[result["outcome"].upper()]
         deciding = [d for d in result["effects"] if d["outcome"] == result["outcome"]]
         reasons = tuple(dict.fromkeys(r for d in deciding for r in d["reasons"]))
+        trace: dict[str, Any] = {"policy": self.version, "contract": contract.to_dict(), "facts": facts.trace(),
+                                 "rules": result["effects"]}
+        explain = getattr(self.contracts, "explain", None)
+        if explain is not None:
+            trace["compiler"] = explain(request)
+        if self.filler is not None:
+            trace["filler"] = self.filler.log[llm_log_start:]
         return Decision(
             outcome,
             residual_targets=residual(facts, result["effects"]) if outcome is Outcome.MINIMIZE else None,
             reasons=reasons or ("no effects",),
-            trace={"policy": self.version, "contract": contract.to_dict(), "facts": facts.trace(),
-                   "rules": result["effects"]},
+            trace=trace,
         )
 
     def close(self) -> None:

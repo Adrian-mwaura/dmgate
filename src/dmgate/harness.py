@@ -55,7 +55,7 @@ def load_dataset(spec: str) -> list[ActionRecord]:
     raise ValueError(f"unknown dataset {spec!r}; use ampermbench-probes, fsdb-dev-probes or jsonl:<path>")
 
 
-RULE_GATES = ("rules-profile-only", "rules-oracle-contract")
+RULE_GATES = ("rules-profile-only", "rules-oracle-contract", "rules-llm")
 
 
 def make_gate(name: str, records: list[ActionRecord]) -> Gate:
@@ -76,6 +76,8 @@ def _rule_gate(name: str, records: list[ActionRecord]) -> Gate:
     rules-profile-only: the dataset's admin profile alone, no request grants (a lower bound).
     rules-oracle-contract: the profile plus the oracle's authorized set (an upper bound that isolates
     the rules from compiler errors; built from ground truth, so never reported as a result).
+    rules-llm: the full pipeline: the M5 compiler and fact filler on the model at DMGATE_LLM_BASE_URL
+    (DMGATE_LLM_MODEL; optional DMGATE_LLM_API_KEY, DMGATE_LLM_EXTRA_BODY), answers cached on disk.
     """
     from dmgate.datasets import ampermbench, fsdb
     from dmgate.rules.gate import RuleGate
@@ -88,9 +90,30 @@ def _rule_gate(name: str, records: list[ActionRecord]) -> Gate:
     if name == "rules-profile-only":
         profile = adapter.profile_contract()
         return RuleGate(lambda request: profile, name=name, note="lower bound: no request grants")
+    if name == "rules-llm":
+        return _llm_gate(adapter.profile_contract())
     contracts = adapter.oracle_contracts(records)
     return RuleGate(lambda request: contracts[request.record_id], name=name,
                     note="upper bound: the contract comes from ground truth; not a result")
+
+
+def _llm_gate(profile) -> Gate:
+    import os
+
+    from dmgate.llm.compiler import ContractCompiler
+    from dmgate.llm.evaluate import client_from_args, default_cache
+    from dmgate.llm.filler import FactFiller
+    from dmgate.rules.gate import RuleGate
+
+    base_url, model = os.environ.get("DMGATE_LLM_BASE_URL"), os.environ.get("DMGATE_LLM_MODEL")
+    if not base_url or not model:
+        raise ValueError("rules-llm needs DMGATE_LLM_BASE_URL and DMGATE_LLM_MODEL (see docs/DEPLOY.md)")
+    extra = os.environ.get("DMGATE_LLM_EXTRA_BODY")
+    client = client_from_args(base_url, model, api_key=os.environ.get("DMGATE_LLM_API_KEY"),
+                              structured=os.environ.get("DMGATE_LLM_STRUCTURED", "response_format"),
+                              extra_body=json.loads(extra) if extra else None, cache=default_cache(model))
+    return RuleGate(ContractCompiler(client, profile), name=f"rules-llm[{model}]", filler=FactFiller(client),
+                    note="full pipeline: compiled contract and filled facts")
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -116,3 +116,9 @@ def test_conditions_compare_and_read_nested_row_values():
     assert TargetSpec("row", where=(Condition("values.age", "ge", 40),)).matches("users/7", row)
     assert not TargetSpec("row", where=(Condition("values.owner", "lt", 3),)).matches("users/7", row)  # str < int
     assert not TargetSpec("row", where=(Condition("values.missing", "eq", None),)).matches("users/7", row)
+
+
+def test_prefix_matches_ranges_like_48xx():
+    spec = TargetSpec("file", where=(Condition("ticket", "prefix", "48"),))
+    assert spec.matches("/a", Resource("/a", "file", {"ticket": "4819"}))
+    assert not spec.matches("/b", Resource("/b", "file", {"ticket": "5148"}))

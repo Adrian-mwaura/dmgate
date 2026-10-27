@@ -105,11 +105,12 @@ class Grant:
 
 
 _MISSING = object()
+CONDITION_OPS = ("eq", "in", "contains", "prefix", "lt", "le", "gt", "ge")
 
 
 @dataclass(frozen=True)
 class Condition:
-    """One test on a resource: `attr` eq / in / contains / lt / le / gt / ge `value`.
+    """One test on a resource: `attr` eq / in / contains / prefix / lt / le / gt / ge `value`.
 
     The attr "id" is the resource id; a dotted attr reads nested values ("values.owner" is the owner
     column of a database row). Comparing values of different types is simply false.
@@ -120,7 +121,7 @@ class Condition:
     value: Any
 
     def __post_init__(self) -> None:
-        if self.op not in ("eq", "in", "contains", "lt", "le", "gt", "ge"):
+        if self.op not in CONDITION_OPS:
             raise ValueError(f"unknown condition operator {self.op!r}")
         if self.op == "in":
             object.__setattr__(self, "value", tuple(self.value))
@@ -135,6 +136,8 @@ class Condition:
             return actual in self.value
         if self.op == "contains":
             return isinstance(actual, str) and str(self.value) in actual
+        if self.op == "prefix":
+            return isinstance(actual, str) and actual.startswith(str(self.value))
         try:
             return {"lt": actual < self.value, "le": actual <= self.value,
                     "gt": actual > self.value, "ge": actual >= self.value}[self.op]
