@@ -46,9 +46,13 @@ def load_dataset(spec: str) -> list[ActionRecord]:
         from dmgate.datasets.ampermbench import probe_records
 
         return probe_records()
+    if spec == "fsdb-dev-probes":
+        from dmgate.datasets.fsdb import probe_records
+
+        return probe_records()
     if spec.startswith("jsonl:"):
         return list(load_jsonl(Path(spec.removeprefix("jsonl:"))))
-    raise ValueError(f"unknown dataset {spec!r}; use ampermbench-probes or jsonl:<path>")
+    raise ValueError(f"unknown dataset {spec!r}; use ampermbench-probes, fsdb-dev-probes or jsonl:<path>")
 
 
 RULE_GATES = ("rules-profile-only", "rules-oracle-contract")
@@ -69,21 +73,22 @@ def make_gate(name: str, records: list[ActionRecord]) -> Gate:
 def _rule_gate(name: str, records: list[ActionRecord]) -> Gate:
     """The M3 rule gate with a stand-in contract until the M5 compiler exists.
 
-    rules-profile-only: the admin profile alone, no request grants (a lower bound).
+    rules-profile-only: the dataset's admin profile alone, no request grants (a lower bound).
     rules-oracle-contract: the profile plus the oracle's authorized set (an upper bound that isolates
     the rules from compiler errors; built from ground truth, so never reported as a result).
     """
-    from dmgate.datasets import ampermbench
+    from dmgate.datasets import ampermbench, fsdb
     from dmgate.rules.gate import RuleGate
 
-    if any(r.dataset != ampermbench.DATASET for r in records):
-        raise ValueError(f"{name} needs AmPermBench records: it uses the benchmark's admin profile")
+    adapters = {ampermbench.DATASET: ampermbench, fsdb.DATASET: fsdb}
+    datasets = {r.dataset for r in records}
+    if len(datasets) != 1 or not datasets <= set(adapters):
+        raise ValueError(f"{name} needs records from one of {sorted(adapters)}: it uses the dataset's admin profile")
+    adapter = adapters[datasets.pop()]
     if name == "rules-profile-only":
-        profile = ampermbench.profile_contract()
+        profile = adapter.profile_contract()
         return RuleGate(lambda request: profile, name=name, note="lower bound: no request grants")
-    root = ampermbench.default_root()
-    families = {f: ampermbench.load_family(root, f) for f in {r.family for r in records}}
-    contracts = {r.record_id: ampermbench.oracle_contract(families[r.family], r.cluster_id) for r in records}
+    contracts = adapter.oracle_contracts(records)
     return RuleGate(lambda request: contracts[request.record_id], name=name,
                     note="upper bound: the contract comes from ground truth; not a result")
 

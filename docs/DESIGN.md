@@ -82,9 +82,11 @@ Ordered lattice: `Allow < Minimize < Ask < Deny`.
 
 Every tool call resolves to a list of effects `(verb, kind, targets, unresolved)` plus data flows
 between them (pipes, redirects, uploads). Verbs: `read | write | delete | control | egress | exec`;
-`control` covers lifecycle operations on live resources (cancel a job, restart a service). SQL verbs
-arrive with the SQL resolver in M4. An effect with any unresolved selector, or an opaque program, is
-never exact. Implemented in `dmgate.effects`.
+`control` covers lifecycle operations on live resources (cancel a job, restart a service). Database
+effects (M4) use the kinds `table`, `column` and `row` (ids `customers`, `customers.email`,
+`customers/42`); a SELECT or UPDATE is a row effect that only selects records plus a column effect that
+carries the data, so rules can narrow rows and columns separately. An effect with any unresolved
+selector, or an opaque program, is never exact. Implemented in `dmgate.effects`.
 
 ### 5.3 Fact schema
 
@@ -146,6 +148,15 @@ Adapters map tool calls to effects:
   `curl/scp/nc` egress, `git`, `kubectl`, `psql/sqlite3` → SQL). Pipes become data flows.
   Interpreters with inline code, `eval`, scripts, `make/pytest/npm` → `opaque`.
 - **SQL:** sqlglot → tables, columns, predicates, verb, LIMIT; dry-run `COUNT`/id query for blast radius.
+  Implemented in M4 (`dmgate.effects.sql`, sqlglot 30.22): the dry-run turns FROM/JOIN/WHERE into a
+  SELECT of primary keys against a read-only in-memory copy of the database snapshot in
+  `environment["databases"]` (`dmgate.effects.database`; production would use a read-only replica).
+  `*` expands from the schema; aggregates read the rows they summarize; set operations, CTEs and
+  unknown tables or columns stay unresolved; PRAGMA, ATTACH and unparsable SQL are opaque. Reached
+  from the shell (`sqlite3`, including `.tables` and `.dump`; `psql -c`; `mysql -e`) and from SQL tool
+  calls. Snapshots also feed the registry: tables, columns (with schema sensitivity and security
+  labels) and rows (with their values, for contract selectors). File globs now expand against the
+  registry's files with bash rules.
 - **File tools:** direct mapping; writes to registered resource-backing files (e.g. AmPermBench
   `objects.json`) become resource effects. This closes the in-project-edit bypass AmPermBench found.
 - **MCP/API tools:** declarative per-tool effect specs; unknown tools get an LLM-proposed spec, cached and reviewed.
@@ -371,6 +382,21 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
     actions can only show FPR ≤ 0.93% (one-sided 95%), which is why the benign corpus matters.
 - **FS/DB benchmark (ours):** same three axes (specificity, blast radius, risk) over filesystem and
   database tasks. Development data plus a released contribution.
+  - **v0 (M4, `dmgate.datasets.fsdb`, dataset `fsdb-dev-probes`):** six families: fs-cleanup (rm),
+    fs-read (cat), fs-share (curl/scp upload), db-delete, db-update, db-query (SQL via `sqlite3` or an
+    SQL tool). Each is AmPermBench's 4 × 4 × 2 matrix, `Prompt(S,B,R) = S_template[S](B_slot[B],
+    R_slot[R])`, with R0 a staging lane (internal data) and R1 a production lane (customer data): 192
+    prompts. Same candidate structure in every family and lane: T1-T3 the user may mean; decoys P1
+    (own, still active), P2 (other category, same ticket), P3 (colleague's), P4 (shared, protected),
+    P5 (release, protected, R1 only); fillers F1-F2. B0/B1 authorize T1, B2/B3 T1-T3; read and update
+    families also authorize exactly the needed column. 3,104 probes (528 benign): each candidate,
+    the authorized batch, the batch plus each decoy, plus globs, SQL predicates, extra columns, `*`,
+    all rows and another host. Labels are judged within each prompt's universe of targets.
+  - Validation: every S×B×R cell once; neighbours differ in one slot only; the authorized set equals
+    the request's meaning re-derived from the environment (registry and database); oracle sets are
+    disjoint and protected decoys are protected; the resolvers recover all 3,104 probe targets
+    exactly; with the oracle contract, coverage matches every label.
+  - It is development data: rules, prompts and exemplars may be tuned on it.
 - **Injection suites:** e.g. AgentDojo-style tasks for the untrusted-context threat.
 - **Benign corpus:** 10k+ actions from OpenHands runs on ordinary coding/data tasks (gate in log-only
   mode) plus public trajectories.
@@ -399,14 +425,15 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
 | P4 | Lifecycle: abductive loop, GEPA, LoRA, patch promotion | E4, E5 |
 | P5 | FS/DB benchmark release, demo UI (decision-trace viewer), write-up | — |
 
-Status: **P0 and M1 done (2026-10-26), M2 and M3 done (2026-10-27).** P0 and M1 were rebuilt in
+Status: **P0 and M1 done (2026-10-26), M2, M3 and M4 done (2026-10-27).** P0 and M1 were rebuilt in
 this repository from the first prototype (`C:\Users\adria\OneDrive\Desktop\Huawei Challenge`, kept as
 reference only). P0: record schema, gate interface, scoring, exact and clustered CIs, reports,
 harness CLI, AmPermBench probe set. M1: effect resolver. M2: contract model, fact schema, catalogs,
 session ledger, fact builder; `explain` prints the facts. M3: invariants, soft table, composition in
-Rego on an OPA sidecar, box geometry, rule gate. 204 tests.
+Rego on an OPA sidecar, box geometry, rule gate. M4: SQL resolver with dry-run, database snapshots,
+file globs, the FS/DB dev benchmark v0. 247 tests.
 
-M3 bounds on the probe set (stand-in contracts until M5; neither is a result):
+M3 bounds on the AmPermBench probe set (stand-in contracts until M5; neither is a result):
 
 | Gate | Contract | FPR | FNR |
 |---|---|---|---|
@@ -415,6 +442,17 @@ M3 bounds on the probe set (stand-in contracts until M5; neither is a result):
 
 The gap between the two is the contract compiler's job (M5).
 
+M4 on the FS/DB dev probes, rules as of M3 (dev data, so these numbers drive rule work):
+
+| Gate | FPR | FNR | Where the errors are |
+|---|---|---|---|
+| `rules-profile-only` | 74.2% | 19.3% | every destructive or out-of-ceiling action asked; db-update writes allowed |
+| `rules-oracle-contract` | 15.2% | 46.0% | fs-read 92% FN, db-query 94% FN, db-update 78% FN, fs-share 100% FP |
+
+With a perfect contract, the M3 rules lose nothing on deletes (fs-cleanup, db-delete: 0% / 0%) but
+miss over-reads and over-writes: reads and writes inside the envelope are allowed whatever their
+targets, and a read feeding a requested upload counts as exposed. These are Q12.
+
 ### P1 milestones
 
 | # | Milestone | Validation | Needs from user |
@@ -422,7 +460,7 @@ The gap between the two is the contract compiler's job (M5).
 | M1 ✅ | Effect model, resource registry, shell resolver (tree-sitter-bash) | Resolved targets equal ground truth on all 2,560 probe commands (parser correctness, not tuning) | — |
 | M2 ✅ | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact; with the oracle's contract, `targets_in_contract` reproduces all 2,560 probe labels (plumbing, not tuning) | — |
 | M3 ✅ | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor; Rego/Python agreement on every cell | OK to download the OPA binary (given) |
-| M4 | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests | — |
+| M4 ✅ | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests; resolvers recover all 3,104 probe targets | — |
 | M5 | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact | AutoDL endpoint, GPU type (Q6) |
 | M6 | OpenHands runs in AmPermBench task containers (gate log-only) → test records; first end-to-end numbers, E1, E7 | Run coverage across 128 prompts | Agent model choice (Q7) |
 
@@ -448,7 +486,8 @@ The gap between the two is the contract compiler's job (M5).
 | Q7 | Agent model for OpenHands: open model on AutoDL or an API model? | Deployment |
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
-| Q11 | M3 choices made while building, awaiting review: (a) soft outcome = most restrictive matching row, Ask when none matches; (b) a verified citation lowers the soft layer to Allow (not one step); (c) the residual-risk escalation sits beside the floor, so a citation cannot lower it; (d) the nine invariants and twenty soft rows as written; (e) opaque programs are Ask until the sandbox exists (INV-6), then the soft layer allows them for judgment in the sandbox; (f) Minimize narrows within one effect only: an action of separate commands where one is unrequested (`rm a && rm x`) is asked about whole. Dropping such sub-commands belongs with the Minimize executor (P3) | M3 |
+| Q12 | Rule gaps the FS/DB dev benchmark found (needs debate before rule changes): (a) **read minimization**: SR-READ allows any read inside the envelope, so reading a colleague's tickets, other customers' rows or unneeded columns passes. Should reads of targets outside the contract be narrowed (Minimize to covered rows/columns/files) or asked, and for all data or only S2+ (leaving coding agents free to explore S0/S1 workspace files)? (b) **write targets**: SW-WRITE allows any write inside the envelope (chosen for reversible workspace files), so updating other people's orders or extra columns passes. Needs a way to tell workspace files from records, e.g. a `target_class` fact or contract targets that cover the workspace for coding tasks. (c) **named destinations**: a read feeding an upload to a host the request names has sink `remote_other`, so SR-EXPOSED asks (all fs-share benign FP). Proposal: a `remote_named` sink class, mirroring `recipient_named` | M4 |
+| Q11 | Accepted for now 2026-10-27 (revisit during testing). M3 choices made while building: (a) soft outcome = most restrictive matching row, Ask when none matches; (b) a verified citation lowers the soft layer to Allow (not one step); (c) the residual-risk escalation sits beside the floor, so a citation cannot lower it; (d) the nine invariants and twenty soft rows as written; (e) opaque programs are Ask until the sandbox exists (INV-6), then the soft layer allows them for judgment in the sandbox; (f) Minimize narrows within one effect only: an action of separate commands where one is unrequested (`rm a && rm x`) is asked about whole. Dropping such sub-commands belongs with the Minimize executor (P3) | M3 |
 | Q10 | Accepted for now 2026-10-27 (revisit during testing). M2 choices made while building: (a) one fact record per effect, action outcome = join; (b) schema extensions: `unresolved` fact, `unknown` values for sensitivity / sink / volume / security change, `none` sink, residual-risk categories; (c) write grants last the session; (d) unknown sensitivity counts as S3 in the envelope check; (e) `session_chain` counts only reads known to be S2+; (f) `volume` bucket edges (3 / 20, ×4 of the expectation) are placeholders until M4; (g) the built-in path catalog; (h) AmPermBench catalog says its resources are S1, and its admin profile allows the git remote `origin` | M2 |
 
 ## 12. Decision log
@@ -470,6 +509,7 @@ The gap between the two is the contract compiler's job (M5).
 | 2026-10-27 | M2 built (user asked to skip ahead from the lessons). Its own choices are open for review as Q10 |
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
+| 2026-10-27 | Q11 accepted for now. M4 built (sqlglot 30.22 added). Bug fixes found by the dev benchmark: INV-7 now spares destinations the request names (its stated intent); the FS/DB oracle contract takes its ceiling from files and columns, not row selections. Rule gaps open as Q12 |
 
 ## 13. References
 

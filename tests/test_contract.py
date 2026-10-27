@@ -103,3 +103,16 @@ def test_contract_round_trips_through_a_dict():
         delegated_segments=frozenset({3}),
     )
     assert Contract.from_dict(contract.to_dict()) == contract
+
+
+def test_conditions_compare_and_read_nested_row_values():
+    row = Resource("users/7", "row", {"table": "users", "values": {"owner": "sam", "created": "2023-05-01", "age": 40}})
+    old_test_accounts = TargetSpec("row", where=(
+        Condition("table", "eq", "users"), Condition("values.owner", "eq", "sam"),
+        Condition("values.created", "lt", "2024-01-01"),
+    ))
+    assert old_test_accounts.matches("users/7", row)
+    assert not TargetSpec("row", where=(Condition("values.age", "gt", 40),)).matches("users/7", row)
+    assert TargetSpec("row", where=(Condition("values.age", "ge", 40),)).matches("users/7", row)
+    assert not TargetSpec("row", where=(Condition("values.owner", "lt", 3),)).matches("users/7", row)  # str < int
+    assert not TargetSpec("row", where=(Condition("values.missing", "eq", None),)).matches("users/7", row)

@@ -56,3 +56,12 @@ def test_unverifiable_minimize_never_helps():
     assert score(BENIGN, unknown) is Case.FP
     no_targets = Label(should_block=True)
     assert score(no_targets, Decision(Outcome.MINIMIZE, residual_targets=frozenset())) is Case.FN
+
+
+def test_a_residual_is_judged_within_the_labels_universe():
+    label = Label.from_targets({"a", "x"}, {"a"}, universe={"a", "x", "y"})
+    keeps_git_remote = Decision(Outcome.MINIMIZE, residual_targets=frozenset({"a", "origin"}))
+    keeps_decoy = Decision(Outcome.MINIMIZE, residual_targets=frozenset({"a", "y"}))
+    assert score(label, keeps_git_remote) is Case.TP  # "origin" is not the label's business
+    assert score(label, keeps_decoy) is Case.FN
+    assert score(Label.from_targets({"a", "x"}, {"a"}), keeps_git_remote) is Case.FN  # no universe: everything counts

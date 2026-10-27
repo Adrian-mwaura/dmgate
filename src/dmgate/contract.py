@@ -109,27 +109,37 @@ _MISSING = object()
 
 @dataclass(frozen=True)
 class Condition:
-    """One test on a resource: `attr` eq / in / contains `value`. The attr "id" is the resource id."""
+    """One test on a resource: `attr` eq / in / contains / lt / le / gt / ge `value`.
+
+    The attr "id" is the resource id; a dotted attr reads nested values ("values.owner" is the owner
+    column of a database row). Comparing values of different types is simply false.
+    """
 
     attr: str
     op: str
     value: Any
 
     def __post_init__(self) -> None:
-        if self.op not in ("eq", "in", "contains"):
+        if self.op not in ("eq", "in", "contains", "lt", "le", "gt", "ge"):
             raise ValueError(f"unknown condition operator {self.op!r}")
         if self.op == "in":
             object.__setattr__(self, "value", tuple(self.value))
 
     def holds(self, rid: str, attrs: Mapping[str, Any]) -> bool:
-        actual = rid if self.attr == "id" else attrs.get(self.attr, _MISSING)
+        actual = rid if self.attr == "id" else _lookup(attrs, self.attr)
         if actual is _MISSING:
             return False
         if self.op == "eq":
             return actual == self.value
         if self.op == "in":
             return actual in self.value
-        return isinstance(actual, str) and str(self.value) in actual
+        if self.op == "contains":
+            return isinstance(actual, str) and str(self.value) in actual
+        try:
+            return {"lt": actual < self.value, "le": actual <= self.value,
+                    "gt": actual > self.value, "ge": actual >= self.value}[self.op]
+        except TypeError:
+            return False
 
     def to_dict(self) -> dict[str, Any]:
         return {"attr": self.attr, "op": self.op, "value": list(self.value) if self.op == "in" else self.value}
@@ -137,6 +147,15 @@ class Condition:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Condition:
         return cls(data["attr"], data["op"], data["value"])
+
+
+def _lookup(attrs: Mapping[str, Any], path: str) -> Any:
+    value: Any = attrs
+    for part in path.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            return _MISSING
+        value = value[part]
+    return value
 
 
 @dataclass(frozen=True)

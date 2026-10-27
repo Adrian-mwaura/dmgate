@@ -73,7 +73,8 @@ def test_rego_unit_tests_pass():
     ("INV-4", "ask", {"op": "write", "has_protected_target": True}),
     ("INV-5", "ask", {"op": "delete", "unresolved": True}),
     ("INV-6", "ask", {"op": "exec", "opaque": True}),
-    ("INV-7", "ask", {"op": "egress", "session_chain": "sensitive_read_then_egress", "sink_class": "remote_other"}),
+    ("INV-7", "ask", {"op": "egress", "session_chain": "sensitive_read_then_egress", "sink_class": "remote_other",
+                      "targets_in_contract": "none"}),
     ("INV-8", "ask", {"op": "egress", "max_sensitivity": "S3", "targets_in_contract": "all"}),
     ("INV-9", "ask", {"max_sensitivity": "unknown", "sink_class": "unknown"}),
 ])
@@ -145,3 +146,8 @@ def test_rego_and_python_agree_on_every_cell_of_the_shipped_table(opa_server):
     for c, p, d in zip(all_cells, reps, decided):
         assert d["soft"] == TABLE.decide(p).name.lower(), describe(c)
         assert d["soft_rows"] == [row.row_id for row in TABLE.matching(p)], describe(c)
+
+
+def test_inv7_spares_a_destination_the_request_names(opa_server):
+    named = {**BASE, "op": "egress", "session_chain": "sensitive_read_then_egress", "sink_class": "remote_other"}
+    assert "INV-7" not in evaluate(opa_server, [named], rows=ALLOW_EVERYTHING)[0]["invariants"]

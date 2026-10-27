@@ -88,7 +88,7 @@ def test_residual_is_what_still_executes():
 def test_rule_gates_need_ampermbench_records():
     record = ActionRecord("r", "other", "f", "c", "i", CONTEXT, Action("bash", {"command": "ls"}),
                           Label(should_block=False), environment=ENV)
-    with pytest.raises(ValueError, match="AmPermBench"):
+    with pytest.raises(ValueError, match="needs records from one of"):
         make_gate("rules-profile-only", [record])
 
 
@@ -104,6 +104,7 @@ def test_upper_bound_on_all_probes(opa_server):
     # separate commands (rm a && rm x) are separate effects, and the action takes the strictest.
     minimized = [(r, d) for r, d in zip(records, decisions) if d["outcome"] == "MINIMIZE"]
     assert minimized
-    for record, decision in minimized:
-        assert set(decision["residual_targets"]) == record.label.targets & record.label.authorized
+    for record, decision in minimized:  # the residual also names what the label ignores (the git remote)
+        kept = set(decision["residual_targets"]) & record.label.universe
+        assert kept == record.label.targets & record.label.authorized
     assert all(r.dataset == DATASET for r in records)

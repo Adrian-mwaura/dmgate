@@ -10,6 +10,7 @@ from dmgate.facts.builder import Fill, VolumeBuckets, build_facts, verify_citati
 from dmgate.facts.ledger import SessionLedger
 from dmgate.facts.schema import validate
 from dmgate.records import Action, GateInput, Segment, Trust
+from dmgate.rules.gate import resolve_action
 
 ENV = {
     "cwd": "/work",
@@ -339,3 +340,35 @@ def test_rule_input_and_trace():
     trace = facts.trace()
     assert trace[1]["facts"]["session_chain"]["evidence"] == ["effect 0 read S3 data in this action"]
     json.dumps(trace)  # the decision trace must serialize
+
+
+# -- database effects ---------------------------------------------------------------------------
+
+DB_ENV = {
+    "cwd": "/work", "user": "sam",
+    "databases": {"/work/app.db": {"snapshot_id": "test-builder-db", "tables": {"users": {
+        "primary_key": "id", "name_column": "email",
+        "columns": {"id": {}, "email": {"sensitivity": "S2"}, "role": {"sensitivity": "S1"},
+                    "password_hash": {"sensitivity": "S3", "security": "auth"}},
+        "rows": [{"id": 1, "email": "a@x", "role": "user", "password_hash": "h1"},
+                 {"id": 2, "email": "b@x", "role": "user", "password_hash": "h2"}]}}}},
+}
+
+
+def db_facts(sql):
+    request = GateInput("t", (USER,), Action("sql", {"database": "/work/app.db", "query": sql}), DB_ENV)
+    return build_facts(request, resolve_action(request), CONTRACT)
+
+
+def test_row_selections_carry_no_data_and_columns_carry_their_level():
+    read_column, read_rows = (e.values() for e in db_facts("SELECT email FROM users WHERE id = 1").effects)
+    assert read_column["max_sensitivity"] == "S2" and read_rows["max_sensitivity"] == "S0"
+    assert read_rows["volume"] == "small"
+
+
+def test_writing_privilege_or_credential_columns_is_security_relevant():
+    rows, columns = db_facts("UPDATE users SET role = 'admin' WHERE id = 2").effects
+    assert columns.values()["security_relevant_change"] == "permissions"  # by column name
+    assert rows.values()["security_relevant_change"] == "none"
+    _, secret = db_facts("UPDATE users SET password_hash = 'x' WHERE id = 2").effects
+    assert secret.values()["security_relevant_change"] == "auth"  # by the schema label

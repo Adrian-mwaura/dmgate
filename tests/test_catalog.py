@@ -96,3 +96,21 @@ def test_secret_detectors_fire(text, detector):
 ])
 def test_secret_detectors_stay_quiet_on_ordinary_commands(text):
     assert detect_secrets(text) == ()
+
+
+@pytest.mark.parametrize("column,level", [
+    ("users.password_hash", "S3"), ("customers.ssn", "S3"), ("payments.card_number", "S3"),
+    ("users.email", "S2"), ("users.billing_email", "S2"), ("users.full_name", "S2"), ("orders.status", None),
+])
+def test_column_names_give_a_sensitivity_when_the_schema_does_not(column, level):
+    assert CATALOG.sensitivity("column", column, None)[0] == level
+
+
+def test_schema_labels_win_over_column_names():
+    labelled = Resource("users.email", "column", {"sensitivity": "S1"})
+    assert CATALOG.sensitivity("column", "users.email", labelled) == ("S1", "registry")
+    assert Catalog.column_security("users.role", None)[0] == "permissions"
+    assert Catalog.column_security("users.api_token", None)[0] == "auth"
+    assert Catalog.column_security("users.nickname", Resource("users.nickname", "column", {"security": "auth"})) == (
+        "auth", "registry")
+    assert Catalog.column_security("orders.status", None)[0] == "none"

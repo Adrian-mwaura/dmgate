@@ -24,8 +24,10 @@ from typing import Any
 import tree_sitter_bash
 from tree_sitter import Language, Node, Parser
 
+from dmgate.effects.database import find_snapshot
 from dmgate.effects.model import LISTING, RECURSIVE, SENDS_DATA, SENDS_REPOSITORY, Effect, Resolution, Verb
 from dmgate.effects.registry import Registry, Resource
+from dmgate.effects.sql import listing_effect, resolve_sql
 
 _PARSER = Parser(Language(tree_sitter_bash.language()))
 _MAX_DEPTH = 8  # nesting of bash -c, eval, xargs, find -exec
@@ -53,6 +55,7 @@ class _Ctx:
     home: str | None
     user: str | None
     wrappers: list[tuple[tuple[str, ...], int]]
+    environment: Mapping[str, Any] = field(default_factory=dict)
     bindings: dict[str, str] = field(default_factory=dict)
     effects: list[Effect] = field(default_factory=list)
     flows: list[tuple[int, int]] = field(default_factory=list)
@@ -68,6 +71,7 @@ def resolve_shell(command: str, environment: Mapping[str, Any] | None = None) ->
         home=env.get("home"),
         user=env.get("user"),
         wrappers=[(tuple(w["argv_prefix"]), int(w.get("skip", 0))) for w in env.get("command_wrappers", ())],
+        environment=env,
     )
     _run_source(ctx, command)
     return Resolution(tuple(ctx.effects), tuple(ctx.flows), ctx.parse_error)
@@ -399,11 +403,48 @@ def _file_effect(ctx: _Ctx, verb: Verb, args: list[Arg], cmd: str, note: str = "
     targets, unresolved = set(), []
     for a in args:
         p = _path(ctx, a)
-        if p is None:
-            unresolved.append(a.raw)
-        else:
+        if p is not None:
             targets.add(p)
+        elif expanded := _expand_glob(ctx, a):
+            targets |= expanded
+        else:
+            unresolved.append(a.raw)
     return Effect(verb, "file", frozenset(targets), tuple(unresolved), command=cmd, note=note)
+
+
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """Bash glob semantics: * and ? stay within one path segment and do not match a leading dot."""
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        segment_start = i == 0 or pattern[i - 1] == "/"
+        if c in "*?":
+            out.append((r"(?!\.)" if segment_start else "") + ("[^/]*" if c == "*" else "[^/]"))
+        elif c == "[" and "]" in pattern[i + 2:]:
+            end = pattern.index("]", i + 2)
+            body = pattern[i + 1:end]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body) + "]")
+            i = end
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.compile("".join(out))
+
+
+def _expand_glob(ctx: _Ctx, a: Arg) -> set[str]:
+    """A glob expanded against the files the registry knows (a filesystem snapshot). No match means
+    bash passes the pattern on literally and the command fails, so the caller keeps it unresolved."""
+    if not a.glob or a.text is None or not ctx.registry.knows("file"):
+        return set()
+    pattern = a.text
+    if pattern.startswith("~"):
+        if ctx.home is None:
+            return set()
+        pattern = ctx.home + pattern[1:]
+    if not pattern.startswith("/") and ctx.cwd is not None:
+        pattern = posixpath.join(ctx.cwd, pattern)
+    regex = _glob_regex(posixpath.normpath(pattern))
+    return {r.id for r in ctx.registry.of_kind("file") if regex.fullmatch(r.id)}
 
 
 def _opaque(prog: str, args: list[Arg], note: str = "") -> Effect:
@@ -1254,9 +1295,92 @@ def _aws(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
 _INTERPRETERS = frozenset({
     "python", "python2", "python3", "node", "ruby", "perl", "php", "deno", "bun", "java", "go", "cargo",
     "make", "cmake", "npm", "npx", "yarn", "pnpm", "pip", "pip3", "pytest", "tox", "nox", "gradle", "mvn",
-    "docker", "podman", "osascript", "pwsh", "powershell", "source", ".", "sqlite3", "psql", "mysql",
+    "docker", "podman", "osascript", "pwsh", "powershell", "source", ".",
     "mongosh", "mongo", "redis-cli", "uv", "poetry", "conda",
 })
+
+
+# ---------------------------------------------------------------------------------------------
+# Database clients: the SQL goes to the SQL resolver (dmgate.effects.sql)
+
+
+def _sql(ctx: _Ctx, sql: str, database: str | None) -> None:
+    resolution = resolve_sql(sql, ctx.environment, database)
+    base = len(ctx.effects)
+    ctx.effects.extend(resolution.effects)
+    ctx.flows.extend((a + base, b + base) for a, b in resolution.flows)
+
+
+_SQLITE_VALUE_FLAGS = frozenset({"-cmd", "-separator", "-newline", "-nullvalue", "-init", "-vfs", "-lookaside",
+                                 "-maxsize", "-mmap", "-pagecache", "-heap", "-escape"})
+_SQLITE_QUIET = frozenset({".mode", ".headers", ".header", ".width", ".nullvalue", ".separator", ".timer",
+                           ".bail", ".echo", ".changes"})
+
+
+def _sqlite3(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
+    positional = _positionals(args, _SQLITE_VALUE_FLAGS)
+    if not positional:
+        _add(ctx, _opaque(prog, args, "interactive database shell"))
+        return
+    database = _path(ctx, positional[0])
+    if database is None:
+        _add(ctx, _opaque(prog, args, "database path not static"))
+        return
+    statements = _flag_value(args, "-cmd") + positional[1:]
+    if not statements:
+        _add(ctx, _opaque(prog, args, "SQL read from standard input"))
+        return
+    for a in statements:
+        if a.text is None:
+            _add(ctx, _opaque(prog, args, "SQL not static"))
+        elif a.text.strip().startswith("."):
+            _sqlite_dot(ctx, a.text.split(), database, args)
+        else:
+            _sql(ctx, a.text, database)
+
+
+def _sqlite_dot(ctx: _Ctx, words: list[str], database: str, args: list[Arg]) -> None:
+    command, rest = words[0], words[1:]
+    if command in (".tables", ".schema", ".indexes", ".indices"):
+        _add(ctx, listing_effect(find_snapshot(ctx.environment, database)))
+    elif command == ".dump":
+        snapshot = find_snapshot(ctx.environment, database)
+        tables = rest or (list(snapshot.tables) if snapshot else [])
+        if not tables:
+            _add(ctx, _opaque("sqlite3", args, ".dump of an unknown database"))
+        for table in tables:
+            _sql(ctx, f'SELECT * FROM "{table}"', database)
+    elif command not in _SQLITE_QUIET:
+        _add(ctx, _opaque("sqlite3", args, f"sqlite3 {command}"))
+
+
+_PSQL_VALUE_FLAGS = frozenset({"-h", "--host", "-p", "--port", "-U", "--username", "-d", "--dbname", "-c", "--command",
+                               "-f", "--file", "-v", "--set", "--variable", "-o", "--output", "-F", "-R", "-P",
+                               "--pset", "-T", "-L"})
+_MYSQL_VALUE_FLAGS = frozenset({"-h", "--host", "-P", "--port", "-u", "--user", "-D", "--database", "-e", "--execute",
+                                "-S", "--socket"})
+
+
+def _psql_mysql(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
+    psql = prog == "psql"
+    if psql and _flag_value(args, "-f", "--file"):
+        _add(ctx, _opaque(prog, args, "SQL read from a file"))
+        return
+    named = _flag_value(args, "-d", "--dbname") if psql else _flag_value(args, "-D", "--database")
+    positional = _positionals(args, _PSQL_VALUE_FLAGS if psql else _MYSQL_VALUE_FLAGS)
+    database = (named or positional)[:1]
+    if database and database[0].text is None:
+        _add(ctx, _opaque(prog, args, "database name not static"))
+        return
+    commands = _flag_value(args, "-c", "--command") if psql else _flag_value(args, "-e", "--execute")
+    if not commands:
+        _add(ctx, _opaque(prog, args, "SQL read from standard input"))
+        return
+    for c in commands:
+        if c.text is None:
+            _add(ctx, _opaque(prog, args, "SQL not static"))
+        else:
+            _sql(ctx, c.text, database[0].text if database else None)
 
 _HANDLERS = {
     "rm": _rm, "rmdir": _rm, "unlink": _rm, "shred": _rm,
@@ -1271,4 +1395,5 @@ _HANDLERS = {
     "ftp": _netcat, "sftp": _netcat,
     "git": _git, "scancel": _scancel, "squeue": _squeue, "scontrol": _scontrol,
     "kubectl": _kubectl, "aws": _aws,
+    "sqlite3": _sqlite3, "psql": _psql_mysql, "mysql": _psql_mysql,
 }

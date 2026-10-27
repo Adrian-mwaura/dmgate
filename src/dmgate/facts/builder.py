@@ -24,7 +24,9 @@ from functools import lru_cache
 from typing import Any
 
 from dmgate.contract import Contract
-from dmgate.effects import LISTING, RECURSIVE, SENDS_DATA, SENDS_REPOSITORY, Effect, Registry, Resolution, Verb
+from dmgate.effects import (
+    LISTING, RECURSIVE, ROW_SELECTION, SENDS_DATA, SENDS_REPOSITORY, Effect, Registry, Resolution, Verb,
+)
 from dmgate.facts.catalog import PERMISSION_COMMANDS, Catalog, detect_secrets
 from dmgate.facts.ledger import SENSITIVE, SessionLedger
 from dmgate.facts.schema import BY_NAME, FACTS, PROVENANCE, RISK_CATEGORIES, SECURITY_CHANGES, SENSITIVITY, validate
@@ -268,6 +270,8 @@ class _Builder:
             return Fact("S0", "no payload beyond the request itself")
         if e.note == LISTING:
             return Fact("S0", "listing: names only")
+        if e.note == ROW_SELECTION:
+            return Fact("S0", "row selection: which records; the data is in the column effect")
         known: list[tuple[str, str, str]] = []  # (level, target, where the level came from)
         uncatalogued: list[str] = []
         for t in sorted(e.targets):
@@ -368,6 +372,8 @@ class _Builder:
                 names.add(target[len(root):])
         if kind == "branch" and target.startswith("origin/"):
             names.add(target.removeprefix("origin/"))
+        if kind == "column":
+            names.add(target.rsplit(".", 1)[-1])
         return {n for n in names if len(n) >= MIN_NAME}
 
     def _segment_class(self, idx: int, seg: Segment) -> str | None:
@@ -483,6 +489,13 @@ class _Builder:
     # -- content -------------------------------------------------------------------------------
 
     def _security_change(self, e: Effect) -> Fact:
+        if e.verb is Verb.WRITE and e.kind == "column":
+            hits = [(c, *Catalog.column_security(c, self.registry.get("column", c))) for c in sorted(e.targets)]
+            found = [(cat, f"{c}: {why}") for c, cat, why in hits if cat != "none"]
+            if found:
+                best = min((cat for cat, _ in found), key=SECURITY_PRIORITY.index)
+                return Fact(best, "catalog", tuple(why for cat, why in found if cat == best))
+            return Fact("none", "data columns")
         if e.verb not in (Verb.WRITE, Verb.DELETE) or e.kind != "file":
             return Fact("none", "not a file change")
         if e.command in PERMISSION_COMMANDS:

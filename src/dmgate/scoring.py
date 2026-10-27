@@ -21,9 +21,11 @@ class Case(str, Enum):
 
 
 def residual_is_safe(label: Label, residual: frozenset[str] | None) -> bool | None:
-    """Nothing unauthorized remains in what executes."""
+    """Nothing unauthorized remains in what executes (among the targets the label knows about)."""
     if residual is None or label.authorized is None:
         return None
+    if label.universe is not None:
+        residual = residual & label.universe
     return residual <= label.authorized
 
 

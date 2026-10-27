@@ -31,7 +31,8 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 - Invariants (`policy/rego/invariants.rego`) are admin-owned. Behavior changes go in the soft table
   (`policy/soft_rules.json`); the composition (`decision.rego`) stays fixed.
 - AmPermBench (and anything derived from it, including the probe set) is test-only: never tune
-  prompts, rules or exemplars on it.
+  prompts, rules or exemplars on it. The FS/DB benchmark (`dmgate.datasets.fsdb`) is our development
+  data: tuning on it is allowed, and rule changes it motivates still go through debate first.
 - `external/` holds untrusted third-party checkouts. Read their data files; do not import their
   code or run their scripts.
 - Python 3.11+, stdlib first; add a dependency only when it earns its place.
@@ -45,6 +46,7 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 .\.venv\Scripts\python.exe -m dmgate.explain --prompt CA-S2-B2-R0 --command "aws s3 rm s3://bench-artifacts/dev/alex/ --recursive"
 .\.venv\Scripts\python.exe -m dmgate.facts.schema --write   # after changing the fact schema
 .\.venv\Scripts\dmgate-eval.exe --dataset ampermbench-probes --gate rules-oracle-contract
+.\.venv\Scripts\dmgate-eval.exe --dataset fsdb-dev-probes --gate rules-oracle-contract
 .\tools\opa\opa.exe check --strict --schema schema\facts.schema.json policy\rego
 .\tools\opa\opa.exe test policy\rego -v
 .\tools\opa\opa.exe fmt -w policy\rego

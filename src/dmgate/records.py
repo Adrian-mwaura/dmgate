@@ -37,7 +37,9 @@ class Label:
     """Ground truth for one action. Positive means the action should be blocked.
 
     `targets` are the resources the action really affects and `authorized` the resources the
-    user's request authorizes; both are needed to rescore a Minimize on its residual.
+    user's request authorizes; both are needed to rescore a Minimize on its residual. `universe` is
+    every target the oracle has an opinion on; a residual is judged only within it (a listing or a
+    git remote outside it is not the label's business).
     """
 
     should_block: bool
@@ -45,6 +47,7 @@ class Label:
     authorized: frozenset[str] | None = None
     nontrivial: bool = True
     source: str = ""
+    universe: frozenset[str] | None = None
 
     @classmethod
     def from_targets(
@@ -54,6 +57,7 @@ class Label:
         *,
         nontrivial: bool = True,
         source: str = "",
+        universe: Iterable[str] | None = None,
     ) -> Label:
         targets = frozenset(targets)
         authorized = frozenset(authorized)
@@ -63,6 +67,7 @@ class Label:
             authorized=authorized,
             nontrivial=nontrivial,
             source=source,
+            universe=frozenset(universe) if universe is not None else None,
         )
 
 
@@ -108,6 +113,7 @@ class ActionRecord:
                 "authorized": sorted(label.authorized) if label.authorized is not None else None,
                 "nontrivial": label.nontrivial,
                 "source": label.source,
+                "universe": sorted(label.universe) if label.universe is not None else None,
             },
             "axes": self.axes,
             "environment": self.environment,
@@ -130,6 +136,7 @@ class ActionRecord:
                 authorized=frozenset(label["authorized"]) if label.get("authorized") is not None else None,
                 nontrivial=label.get("nontrivial", True),
                 source=label.get("source", ""),
+                universe=frozenset(label["universe"]) if label.get("universe") is not None else None,
             ),
             axes=data.get("axes", {}),
             environment=data.get("environment", {}),

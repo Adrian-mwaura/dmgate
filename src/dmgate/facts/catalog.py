@@ -108,6 +108,22 @@ PERMISSION_COMMANDS = frozenset({"chmod", "chown", "chgrp", "setfacl", "chattr"}
 # Kinds whose content is workspace metadata: refs and commit history. Environments may override.
 BUILTIN_KIND_DEFAULTS = {"repo": "S0", "branch": "S0"}
 
+# Database columns by name, when the schema does not label them (first match; fnmatch on the column
+# name). A starting catalog like the path rules: admins label their schemas.
+BUILTIN_COLUMN_SENSITIVITY: tuple[PathRule, ...] = (
+    *_rules("S3", "credential-column", "password*", "passwd*", "*secret*", "*token*", "api_key", "apikey",
+            "private_key", "*_key_hash", "mfa_*", "otp*"),
+    *_rules("S3", "identity-number", "ssn", "social_security*", "tax_id", "passport*", "national_id"),
+    *_rules("S3", "payment-column", "card_number", "cc_number", "cvv", "cvc", "iban", "account_number"),
+    *_rules("S2", "personal-column", "email", "*_email", "phone*", "*_phone", "address*", "*_address", "dob",
+            "birth*", "*name", "salary", "ip_address", "location*"),
+)
+BUILTIN_COLUMN_SECURITY: tuple[PathRule, ...] = (
+    *_rules("auth", "credential-column", "password*", "passwd*", "*token*", "api_key", "*secret*", "mfa_*", "otp*"),
+    *_rules("permissions", "privilege-column", "role", "roles", "is_admin", "is_superuser", "is_staff",
+            "permission*", "privilege*", "grant*", "acl"),
+)
+
 
 def first_match(rules: tuple[PathRule, ...], path: str) -> PathRule | None:
     return next((r for r in rules if r.matches(path)), None)
@@ -150,6 +166,10 @@ class Catalog:
             rule = first_match(self.sensitivity_rules, target)
             if rule is not None:
                 return rule.value, f"catalog:{rule.rule_id}"
+        if kind == "column" and target is not None:
+            rule = first_match(BUILTIN_COLUMN_SENSITIVITY, target.rsplit(".", 1)[-1])
+            if rule is not None:
+                return rule.value, f"catalog:{rule.rule_id}"
         if kind in self.kind_defaults:
             return self.kind_defaults[kind], f"catalog:default-{kind}"
         return None, "uncatalogued"
@@ -164,6 +184,16 @@ class Catalog:
             if rule is not None:
                 return True, f"catalog:{rule.rule_id}"
         return False, "not protected"
+
+    @staticmethod
+    def column_security(column: str, resource: Resource | None) -> tuple[str, str]:
+        """Security category of writing a database column: its schema label, else its name."""
+        if resource is not None and resource.attrs.get("security"):
+            return resource.attrs["security"], "registry"
+        rule = first_match(BUILTIN_COLUMN_SECURITY, column.rsplit(".", 1)[-1])
+        if rule is not None:
+            return rule.value, f"catalog:{rule.rule_id}"
+        return "none", "data column"
 
     @staticmethod
     def security_category(path: str) -> tuple[str | None, str]:

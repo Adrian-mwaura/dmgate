@@ -22,6 +22,7 @@ LISTING = "listing"  # reads names, not contents (ls, tree, du, find)
 RECURSIVE = "recursive"  # a file delete that reaches everything below the target
 SENDS_DATA = "sends data"  # egress with a payload (curl -d, scp, ...)
 SENDS_REPOSITORY = "sends repository data"  # git push: the payload is the repository
+ROW_SELECTION = "row selection"  # which records a SQL statement reads or changes; the data is in its column effect
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ class Effect:
     """
 
     verb: Verb
-    kind: str  # file, branch, job, service, object, host, process, repo, database
+    kind: str  # file, branch, job, service, object, host, process, repo, table, column, row
     targets: frozenset[str] = frozenset()
     unresolved: tuple[str, ...] = ()
     exact: bool = True

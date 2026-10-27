@@ -1,7 +1,8 @@
 """The platform's resource registry: what exists and its attributes (owner, namespace, protected...).
 
-Built from `GateInput.environment["resources"]`, a list of {"id", "kind", "attrs"}. Attribute
-names are generic: owner, namespace, partition, bucket, key, name, status, protected, stale.
+Built from `GateInput.environment["resources"]`, a list of {"id", "kind", "attrs"}, plus the
+tables, columns and rows of database snapshots (`dmgate.effects.database`). Attribute names are
+generic: owner, namespace, partition, bucket, key, name, status, protected, stale, sensitivity.
 """
 
 from __future__ import annotations
@@ -28,7 +29,11 @@ class Registry:
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, Any]) -> Registry:
-        return cls(Resource(r["id"], r["kind"], r.get("attrs", {})) for r in environment.get("resources", ()))
+        """Declared resources plus the tables, columns and rows of every database snapshot."""
+        from dmgate.effects.database import snapshots
+
+        declared = [Resource(r["id"], r["kind"], r.get("attrs", {})) for r in environment.get("resources", ())]
+        return cls([*declared, *(r for s in snapshots(environment) for r in s.resources())])
 
     def knows(self, kind: str) -> bool:
         """Whether the registry describes this kind at all (if not, names pass through unchecked)."""

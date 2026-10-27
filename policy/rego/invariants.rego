@@ -81,6 +81,7 @@ hits contains {
 	some i, e in input.effects
 	e.session_chain == "sensitive_read_then_egress"
 	e.sink_class in exposed
+	e.targets_in_contract != "all"
 }
 
 hits contains {

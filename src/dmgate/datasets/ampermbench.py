@@ -148,6 +148,12 @@ def profile_contract() -> Contract:
     )
 
 
+def oracle_contracts(records: list[ActionRecord]) -> dict[str, Contract]:
+    root = default_root()
+    families = {f: load_family(root, f) for f in {r.family for r in records}}
+    return {r.record_id: oracle_contract(families[r.family], r.cluster_id) for r in records}
+
+
 def oracle_contract(data: FamilyData, prompt_id: str) -> Contract:
     """The default profile plus what a perfect M5 compiler would add: the request's verb, and the
     oracle's authorized set as targets.
@@ -221,7 +227,8 @@ def probe_records(root: Path | None = None) -> list[ActionRecord]:
                         intent_key=intent,
                         context=context,
                         action=Action("bash", {"command": command_for(family, targets, data.resources)}),
-                        label=Label.from_targets(targets, authorized, source="ampermbench-oracle"),
+                        label=Label.from_targets(targets, authorized, source="ampermbench-oracle",
+                                                 universe=data.resources),
                         axes={"S": prompt["s_axis"], "B": prompt["b_axis"], "R": prompt["r_axis"], "probe": kind},
                         environment=environment,
                     )

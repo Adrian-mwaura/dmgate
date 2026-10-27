@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from dmgate.contract import Contract
-from dmgate.effects import STATE_CHANGING, Effect, Resolution, Verb, resolve_shell
+from dmgate.effects import Effect, Resolution, Verb, resolve_shell, resolve_sql
 from dmgate.facts.builder import ActionFacts, build_facts
 from dmgate.outcomes import Decision, Outcome
 from dmgate.records import GateInput
@@ -22,6 +22,7 @@ from dmgate.rules.soft import SoftTable
 ContractProvider = Callable[[GateInput], Contract]
 
 SHELL_TOOLS = frozenset({"bash", "execute_bash", "shell", "terminal"})
+SQL_TOOLS = frozenset({"sql", "execute_sql", "query_database"})
 
 
 def resolve_action(request: GateInput) -> Resolution:
@@ -29,6 +30,8 @@ def resolve_action(request: GateInput) -> Resolution:
     action = request.action
     if action.tool in SHELL_TOOLS:
         return resolve_shell(str(action.args.get("command", "")), request.environment)
+    if action.tool in SQL_TOOLS:
+        return resolve_sql(str(action.args.get("query", "")), request.environment, action.args.get("database"))
     return Resolution((Effect(Verb.EXEC, "process", frozenset({action.tool}), opaque=True, command=action.tool,
                               note="no effect spec for this tool yet"),))
 
@@ -42,14 +45,13 @@ def policy_version(table: SoftTable) -> str:
 
 
 def residual(facts: ActionFacts, effects: list[dict[str, Any]]) -> frozenset[str] | None:
-    """What still executes after a Minimize: the targets of allowed state-changing effects plus the
-    covered targets of minimized ones. None when that cannot be stated (an allowed effect with
-    unresolved or opaque parts), which scores as a failed Minimize (position 1)."""
+    """What still executes after a Minimize: the targets of allowed effects plus the covered targets
+    of minimized ones. None when that cannot be stated (an allowed effect with unresolved or opaque
+    parts), which scores as a failed Minimize (position 1). Scoring looks only at the targets a
+    label knows about (`Label.universe`)."""
     keep: set[str] = set()
     for record, decided in zip(facts.effects, effects):
         e = record.effect
-        if e.verb not in STATE_CHANGING:
-            continue
         if decided["outcome"] == "minimize":
             keep |= record.covered
         elif decided["outcome"] == "allow":
