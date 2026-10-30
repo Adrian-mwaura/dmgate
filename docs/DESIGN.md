@@ -369,6 +369,11 @@ Never train on decision-only reward: it makes facts meaningless (reward hacking)
   pinned. Requests use `response_format` json_schema (or vLLM's `structured_outputs` field); the old
   `guided_json` field was removed in vLLM 0.12 and can be ignored silently, so the client refuses it
   and every run starts with a smoke check that the server enforces the schema.
+- **GPU time is decoupled from analysis:** AutoDL GPUs are scarce by day, so the machine is prepared
+  in no-GPU mode (`scripts/autodl_setup.sh`, ending with a dry run against a stub server), measured
+  unattended at night (`scripts/overnight.sh`, one model per ladder rung, with a manifest), and the
+  results and answer cache come back to Windows (`scripts/autodl.ps1`), where runs replay from the
+  cache alone (`DMGATE_LLM_REPLAY=1`).
 
 ## 8. Evaluation
 
@@ -463,7 +468,7 @@ Rego on an OPA sidecar, box geometry, rule gate. M4: SQL resolver with dry-run, 
 file globs, the FS/DB dev benchmark v0. M5 (built 2026-10-27, not yet validated): OpenAI-compatible
 client with constrained JSON and an answer cache, contract compiler, fact filler, `dmgate-llm-eval`,
 `rules-llm` gate; checked with scripted models only, so no accuracy numbers until an endpoint
-exists. 267 tests.
+exists. Overnight kit (setup, overnight run, push and pull, stub server, replay). 269 tests.
 
 M3 bounds on the AmPermBench probe set (stand-in contracts until M5; neither is a result):
 
@@ -543,6 +548,7 @@ targets, and a read feeding a requested upload counts as exposed. These are Q12.
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-10-30 | AutoDL GPUs are scarce by day: prepare in no-GPU mode, measure unattended at night, replay from the cache on Windows. Overnight kit built and dry-run tested |
 | 2026-10-27 | Q6: the gate's GPU is an AutoDL RTX 4090 (24 GB). Model ladder starts at Qwen3.5-4B; vLLM 0.31.0 pinned; client drops `guided_json`, adds `structured_outputs` and a smoke check |
 | 2026-10-27 | Q11 accepted for now. M4 built (sqlglot 30.22 added). Bug fixes found by the dev benchmark: INV-7 now spares destinations the request names (its stated intent); the FS/DB oracle contract takes its ceiling from files and columns, not row selections. Rule gaps open as Q12 |
 

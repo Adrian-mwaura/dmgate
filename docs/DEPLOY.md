@@ -51,7 +51,66 @@ disk, 50 GB data disk, driver 595.71 (CUDA up to 13.2; vLLM's own CUDA 12.x buil
 models at a time; delete one (`rm -rf /root/autodl-tmp/modelscope/...`) or expand the disk before
 the next.
 
-## Step by step
+## When GPUs are scarce: prepare by day, run by night
+
+The GPU is needed for one thing only: producing the model's answers. Everything else (installing,
+downloading weights, testing, analysing) runs without it, and every answer is cached, so one night
+of GPU time gives results that replay all day on Windows with no GPU at all.
+
+1. **Windows, any time.** Copy the project over. A git bundle is the whole repository in one file,
+   so the private GitHub repository is not needed on the machine (commit first: a bundle carries
+   committed history only):
+
+   ```powershell
+   .\scripts\autodl.ps1 -SshHost <host> -Port <port> -Push
+   ```
+
+2. **AutoDL, no-GPU mode (by day).** Start the instance with "无卡模式" (no GPU attached; when it
+   is off, only storage is billed). In its terminal:
+
+   ```bash
+   git clone /root/autodl-tmp/dmgate.bundle /root/autodl-tmp/dmgate   # first time only
+   bash /root/autodl-tmp/dmgate/scripts/autodl_setup.sh
+   ```
+
+   It installs Python, vLLM 0.31.0 and the project, fetches OPA for Linux (checksum-verified),
+   downloads Qwen3.5-4B and Qwen3.5-9B into `/root/autodl-tmp/models`, runs the test suite, and
+   finishes with a **dry run** of the overnight script against a stub server, so a broken script
+   cannot waste a night. Rerunning it skips whatever is done; after a new `-Push` it pulls the
+   new bundle first. Shut the instance down when it says ready.
+
+3. **AutoDL with a GPU (at night).** Start the instance normally, then:
+
+   ```bash
+   tmux new -s night
+   SHUTDOWN=1 bash /root/autodl-tmp/dmgate/scripts/overnight.sh
+   ```
+
+   For each model on the ladder it serves the model, waits until it is ready, runs the smoke
+   check, the compiler and sensitivity measurements and the full `rules-llm` gate on the FS/DB dev
+   probes, then stops the server. A failing rung is logged and the next one still runs. With
+   `SHUTDOWN=1` it powers the machine off at the end, which stops GPU billing (if that fails, stop
+   the instance from the console). Detach with `Ctrl-b` then `d`; the run continues.
+
+4. **Windows, next morning.** Bring the results and the answer cache home, then replay without a
+   GPU:
+
+   ```powershell
+   .\scripts\autodl.ps1 -SshHost <host> -Port <port> -Pull
+   $env:DMGATE_LLM_REPLAY = "1"
+   $env:DMGATE_LLM_MODEL = "Qwen/Qwen3.5-4B"
+   $env:DMGATE_LLM_EXTRA_BODY = '{"chat_template_kwargs": {"enable_thinking": false}}'
+   .\.venv\Scripts\dmgate-eval.exe --dataset fsdb-dev-probes --gate rules-llm
+   ```
+
+   Replay answers only from the cache and stops at the first request it has not seen, so a changed
+   prompt is never silently answered by nobody.
+
+Options for `overnight.sh`: `LADDER="qwen35-4b"` (one rung), `openpangu-7b` (after downloading it
+with `GET=openpangu-7b bash scripts/autodl_setup.sh`), `SAMPLE=300` (a quick subsample, never for
+reported numbers), `DRY_RUN=1` (stub server, no GPU).
+
+## Step by step, by hand
 
 ### On the AutoDL machine
 

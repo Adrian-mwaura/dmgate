@@ -124,9 +124,19 @@ def sensitivity_report(filler: FactFiller, items: list[tuple[str, str, str]]) ->
     }
 
 
-def client_from_args(base_url: str, model: str, *, api_key: str | None, structured: str,
-                     extra_body: dict[str, Any] | None, cache: Path | None, check: bool = True) -> LLMClient:
-    """An endpoint client, smoke-checked first (uncached) so a server that ignores schemas is caught."""
+def client_from_args(base_url: str | None, model: str, *, api_key: str | None, structured: str,
+                     extra_body: dict[str, Any] | None, cache: Path | None, check: bool = True,
+                     replay: bool = False) -> LLMClient:
+    """An endpoint client, smoke-checked first (uncached) so a server that ignores schemas is caught.
+    With `replay`, answers come from the cache only and nothing is sent."""
+    if replay:
+        if cache is None:
+            raise SystemExit("replay needs the answer cache")
+        print(f"replay: answers from {cache} only")
+        return CachedClient(OpenAIClient(base_url or "replay://", model, structured=structured, extra_body=extra_body,
+                                         offline=True), cache)
+    if not base_url:
+        raise SystemExit("an endpoint is needed: set --base-url or DMGATE_LLM_BASE_URL (or replay from the cache)")
     client = OpenAIClient(base_url, model, api_key=api_key, structured=structured, extra_body=extra_body)
     if check:
         ok, message = smoke_check(client)
@@ -152,15 +162,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--task", default="compiler,sensitivity", help="smoke, compiler, sensitivity (comma-separated)")
     parser.add_argument("--families", default="", help="comma-separated family codes (FL,FR,FS,DD,DU,DQ); default all")
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--replay", action="store_true", default=os.environ.get("DMGATE_LLM_REPLAY") == "1",
+                        help="answer from results/llm-cache only, without an endpoint (DMGATE_LLM_REPLAY=1)")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
-    if not args.base_url or not args.model:
-        parser.error("--base-url and --model are required (or DMGATE_LLM_BASE_URL and DMGATE_LLM_MODEL)")
+    if not args.model or not (args.base_url or args.replay):
+        parser.error("--model and --base-url are required (or DMGATE_LLM_MODEL and DMGATE_LLM_BASE_URL; or --replay)")
 
     client = client_from_args(args.base_url, args.model, api_key=os.environ.get(args.api_key_env),
                               structured=args.structured,
                               extra_body=json.loads(args.extra_body) if args.extra_body else None,
-                              cache=None if args.no_cache else default_cache(args.model))
+                              cache=None if args.no_cache else default_cache(args.model), replay=args.replay)
     tasks = set(args.task.split(","))
     if tasks == {"smoke"}:
         return

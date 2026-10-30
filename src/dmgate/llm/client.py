@@ -9,7 +9,8 @@ server that ignores the schema. Whatever the server does, every output is parsed
 against the schema again here; an output that fails is returned as None, never guessed at.
 
 `CachedClient` stores every answer on disk, keyed by the exact request, so evaluations replay
-bit for bit. `ScriptedClient` answers from a function, for tests.
+bit for bit. With `OpenAIClient(offline=True)` inside it, a run replays from the cache alone and
+fails on anything new: analysis without a GPU. `ScriptedClient` answers from a function, for tests.
 """
 
 from __future__ import annotations
@@ -66,7 +67,8 @@ STRUCTURED_MODES = ("response_format", "structured_outputs")
 
 class OpenAIClient:
     def __init__(self, base_url: str, model: str, *, api_key: str | None = None, timeout: float = 120.0,
-                 structured: str = "response_format", extra_body: dict[str, Any] | None = None):
+                 structured: str = "response_format", extra_body: dict[str, Any] | None = None,
+                 offline: bool = False):
         if structured not in STRUCTURED_MODES:
             raise ValueError(f"structured must be one of {STRUCTURED_MODES} (guided_json was removed in vLLM 0.12)")
         self.base_url = base_url.rstrip("/")
@@ -75,6 +77,7 @@ class OpenAIClient:
         self.timeout = timeout
         self.structured = structured
         self.extra_body = extra_body or {}
+        self.offline = offline  # replay mode: never send a request
 
     @property
     def fingerprint(self) -> str:
@@ -96,6 +99,8 @@ class OpenAIClient:
 
     def complete_json(self, messages: Messages, schema: dict[str, Any], *, name: str = "answer", n: int = 1,
                       temperature: float = 0.0, max_tokens: int = 512, seed: int | None = None) -> Completion:
+        if self.offline:
+            raise LLMError("replay mode: this request is not in the answer cache (run it with the model first)")
         body = self.request_body(messages, schema, name=name, n=n, temperature=temperature, max_tokens=max_tokens,
                                  seed=seed)
         headers = {"Content-Type": "application/json"}

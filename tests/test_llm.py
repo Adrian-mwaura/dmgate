@@ -315,3 +315,37 @@ def test_the_residual_risk_flag_needs_every_sample_and_is_off_by_default():
     assert FactFiller(ScriptedClient(lambda m, s, n: [flag, flag, flag]), on).flag_risks(req, facts)[
         (0, "residual_risk_flag")].value == "sensitive"
     assert FactFiller(ScriptedClient(lambda m, s, n: [flag, flag, calm]), on).flag_risks(req, facts) == {}
+
+
+# -- dry runs and replay --------------------------------------------------------------------------
+
+def test_the_stub_server_answers_minimally_and_passes_the_smoke_check():
+    from dmgate.llm.stub_server import minimal, serve
+
+    assert minimal(OUTPUT_SCHEMA) == {"grants": [], "targets": []}
+    assert errors(minimal(OUTPUT_SCHEMA), OUTPUT_SCHEMA) == []
+    server = serve(0, "stub-model")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = OpenAIClient(f"http://127.0.0.1:{server.server_address[1]}/v1", "stub-model")
+        assert smoke_check(client)[0]
+        compiled = ContractCompiler(client, fsdb.profile_contract()).compile(
+            (Segment("user", "delete everything", Trust.TRUSTED),), fsdb.ENVIRONMENTS["R0"])
+        assert compiled.output == {"grants": [], "targets": []}  # knows nothing: profile only
+    finally:
+        server.shutdown()
+
+
+def test_replay_answers_from_the_cache_alone(tmp_path):
+    from dmgate.llm.evaluate import client_from_args
+
+    path = tmp_path / "cache.jsonl"
+    live = CachedClient(ScriptedClient(lambda m, s, n: {"level": "S1"}), path)
+    live.inner.fingerprint = OpenAIClient("http://x/v1", "scripted").fingerprint  # same settings as the replay
+    live.complete_json([{"role": "user", "content": "q"}], SCHEMA)
+    replay = client_from_args(None, "scripted", api_key=None, structured="response_format", extra_body=None,
+                              cache=path, replay=True)
+    assert replay.complete_json([{"role": "user", "content": "q"}], SCHEMA).outputs == ({"level": "S1"},)
+    with pytest.raises(LLMError, match="replay mode"):
+        replay.complete_json([{"role": "user", "content": "new"}], SCHEMA)

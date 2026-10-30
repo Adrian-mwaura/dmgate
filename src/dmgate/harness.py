@@ -107,12 +107,15 @@ def _llm_gate(profile) -> Gate:
     from dmgate.rules.gate import RuleGate
 
     base_url, model = os.environ.get("DMGATE_LLM_BASE_URL"), os.environ.get("DMGATE_LLM_MODEL")
-    if not base_url or not model:
-        raise ValueError("rules-llm needs DMGATE_LLM_BASE_URL and DMGATE_LLM_MODEL (see docs/DEPLOY.md)")
+    replay = os.environ.get("DMGATE_LLM_REPLAY") == "1"
+    if not model or not (base_url or replay):
+        raise ValueError("rules-llm needs DMGATE_LLM_BASE_URL and DMGATE_LLM_MODEL, or DMGATE_LLM_REPLAY=1 "
+                         "(see docs/DEPLOY.md)")
     extra = os.environ.get("DMGATE_LLM_EXTRA_BODY")
     client = client_from_args(base_url, model, api_key=os.environ.get("DMGATE_LLM_API_KEY"),
                               structured=os.environ.get("DMGATE_LLM_STRUCTURED", "response_format"),
-                              extra_body=json.loads(extra) if extra else None, cache=default_cache(model))
+                              extra_body=json.loads(extra) if extra else None, cache=default_cache(model),
+                              replay=replay)
     return RuleGate(ContractCompiler(client, profile), name=f"rules-llm[{model}]", filler=FactFiller(client),
                     note="full pipeline: compiled contract and filled facts")
 
@@ -123,9 +126,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--gate", required=True)
     parser.add_argument("--out", type=Path, default=None, help="output directory (default results/<timestamp>-<gate>)")
     parser.add_argument("--n-boot", type=int, default=2000)
+    parser.add_argument("--sample", type=int, default=None,
+                        help="about this many records (every k-th), for quick checks only, never reported numbers")
     args = parser.parse_args(argv)
 
     records = load_dataset(args.dataset)
+    if args.sample:
+        records = records[::max(1, len(records) // args.sample)]
     gate = make_gate(args.gate, records)
     try:
         results, decisions = run(gate, records)
@@ -140,7 +147,8 @@ def main(argv: list[str] | None = None) -> None:
     with (out / "results.jsonl").open("w", encoding="utf-8") as handle:
         for result, decision in zip(results, decisions):
             handle.write(json.dumps({**result.to_dict(), "decision": decision}, ensure_ascii=False) + "\n")
-    meta = {"dataset": args.dataset, "gate": gate.name, "note": getattr(gate, "note", ""), "n_records": len(records)}
+    meta = {"dataset": args.dataset, "gate": gate.name, "note": getattr(gate, "note", ""), "n_records": len(records),
+            "sampled": bool(args.sample)}
     (out / "summary.json").write_text(json.dumps({**meta, **summary}, indent=2, default=str), encoding="utf-8")
 
     print(f"dataset={args.dataset} gate={gate.name} -> {out}")
