@@ -104,9 +104,10 @@ M2 (extended only through review; the M2 extensions are in Q10):
 | `max_sensitivity` | S0–S3 / unknown | catalogs + detectors (LLM for uncatalogued targets); for writes and egress, also the data flowing in |
 | `targets_in_contract` | all / some / none | set comparison against contract; unresolved selectors never count as covered |
 | `has_protected_target` | bool | registry + catalog |
+| `target_class` | workspace / record / resource / system / destination / program | admin catalog by path + kind defaults; a directory takes the strictest class of the registered files below it (Q12) |
 | `envelope_permits` | bool | contract envelope; unknown sensitivity counts as S3 |
 | `provenance` | user / trusted_structure / delegated / observed / agent_generated / untrusted_instruction | context matching (+ LLM for "is this observed span an instruction?") |
-| `sink_class` | none / context / local / remote_allowlisted / remote_other / recipient_named / recipient_unnamed / unknown | resolver data flows + egress allowlist |
+| `sink_class` | none / context / local / remote_named / remote_allowlisted / remote_other / recipient_named / recipient_unnamed / unknown | resolver data flows; *named* = covered by the contract's targets (Q12c); allowlist |
 | `volume` | small / large / bulk / unknown | target count vs contract expectation |
 | `session_chain` | none / sensitive_read_then_egress | session ledger + earlier effects of the action |
 | `security_relevant_change` | none / auth / ci / permissions / network / deps / unknown | path rules; LLM on the diff |
@@ -226,7 +227,13 @@ Implemented in M2 (`dmgate.facts`):
   least trusted target counts.
 - **Data flows** come from the resolver (pipes, redirects, uploads; `cmd < file` included) and are
   closed transitively. A read's sink is where its data ends up; a write or egress carries the
-  sensitivity of everything flowing in.
+  sensitivity of everything flowing in. A destination the contract's targets cover is *named*
+  (`remote_named`, `recipient_named`), and so is a read whose data goes only there (Q12c).
+- **Class** (`target_class`, Q12): an effect takes the strictest class of its targets (record >
+  resource > system > workspace); listings are workspace (names only); a directory read takes the
+  strictest class, and the highest sensitivity, of the registered files below it, so `grep -r` over
+  code stays free while `grep -r` over a tree holding records counts as a record read. With nothing
+  resolved, a file defaults to workspace and any other kind to its kind's class.
 - **Session ledger** (`dmgate.facts.ledger`): reads of S2+ data, recorded only for actions that ran.
   Handles join it in P3.
 
@@ -291,6 +298,10 @@ Implemented in M3 (`policy/`, `dmgate.rules`; OPA 1.21.2):
   else tightens. `dmgate.rules.soft` validates rows against the schema (a misspelled fact would
   silently never match in Rego) and compares tables exactly: the rows split the fact space into
   finitely many cells (4,320 for the M3 table, out of 38.7M points) on which every table is constant.
+  Since Q12 (table `q12-1`), reads and writes of records and resources split three ways by
+  `targets_in_contract`: all → allow, some → minimize, none → ask; workspace reads and writes keep
+  the M3 rows; egress to a `remote_named` destination is allowed, and a read feeding it is not an
+  exposure.
 - **Composition** (`policy/rego/decision.rego`): per effect, `final = max(floor, soft', risk)`, where
   `soft'` is Allow when the citation is verified and `risk` is Ask when the residual-risk flag is
   live and corroborated by a risk fact (shadow mode by default). Action outcome = max over effects.
@@ -416,6 +427,13 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
     actions can only show FPR ≤ 0.93% (one-sided 95%), which is why the benign corpus matters.
 - **FS/DB benchmark (ours):** same three axes (specificity, blast radius, risk) over filesystem and
   database tasks. Development data plus a released contribution.
+  - **code-explore (Q12):** a seventh family, a coding task in each lane's project workspace. The
+    request names only the failing test(s); the oracle authorizes the whole workspace. Benign probes
+    read every project file, `grep -r` the sources, list the tests and edit docs and fixtures;
+    harmful ones read a customer export or a colleague's ticket, select every customer's email,
+    update someone's order, or upload a source file to an unnamed host. 32 prompts, 512 probes. It
+    prices the exploration A5 and B3 leave free: with the stand-in contract, 0/352 benign actions
+    asked under A5 + B3, 352/352 under the rejected A2 + B2.
   - **v0 (M4, `dmgate.datasets.fsdb`, dataset `fsdb-dev-probes`):** six families: fs-cleanup (rm),
     fs-read (cat), fs-share (curl/scp upload), db-delete, db-update, db-query (SQL via `sqlite3` or an
     SQL tool). Each is AmPermBench's 4 × 4 × 2 matrix, `Prompt(S,B,R) = S_template[S](B_slot[B],
@@ -468,7 +486,9 @@ Rego on an OPA sidecar, box geometry, rule gate. M4: SQL resolver with dry-run, 
 file globs, the FS/DB dev benchmark v0. M5 (built 2026-10-27, not yet validated): OpenAI-compatible
 client with constrained JSON and an answer cache, contract compiler, fact filler, `dmgate-llm-eval`,
 `rules-llm` gate; checked with scripted models only, so no accuracy numbers until an endpoint
-exists. Overnight kit (setup, overnight run, push and pull, stub server, replay). 269 tests.
+exists. Overnight kit (setup, overnight run, push and pull, stub server, replay). Q12 implemented
+(2026-10-30): `target_class` and `remote_named`, record-aware read and write rows, directory
+expansion, the code-explore family. 285 tests.
 
 M3 bounds on the AmPermBench probe set (stand-in contracts until M5; neither is a result):
 
@@ -486,9 +506,18 @@ M4 on the FS/DB dev probes, rules as of M3 (dev data, so these numbers drive rul
 | `rules-profile-only` | 74.2% | 19.3% | every destructive or out-of-ceiling action asked; db-update writes allowed |
 | `rules-oracle-contract` | 15.2% | 46.0% | fs-read 92% FN, db-query 94% FN, db-update 78% FN, fs-share 100% FP |
 
-With a perfect contract, the M3 rules lose nothing on deletes (fs-cleanup, db-delete: 0% / 0%) but
-miss over-reads and over-writes: reads and writes inside the envelope are allowed whatever their
-targets, and a read feeding a requested upload counts as exposed. These are Q12.
+With a perfect contract, the M3 rules lost nothing on deletes but missed over-reads and over-writes,
+and asked about every requested upload. These were Q12.
+
+After Q12 (2026-10-30), on 3,616 FS/DB probes (seven families) and 2,560 AmPermBench probes:
+
+| Gate | FS/DB FPR | FS/DB FNR | AmPermBench FPR | AmPermBench FNR |
+|---|---|---|---|---|
+| `rules-profile-only` | 60.0% (the 352 coding actions pass; every request-specific action asks) | 0.0% | 100% | 0.0% |
+| `rules-oracle-contract` | 0.0% | 0.0% | 0.0% | 0.0% |
+
+The rules now lose nothing a perfect contract knows, on either benchmark; what remains is the
+contract compiler's and the fact filler's accuracy (M5, measured overnight).
 
 ### P1 milestones
 
@@ -524,7 +553,7 @@ targets, and a read feeding a requested upload counts as exposed. These are Q12.
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
 | Q13 | M5 choices made while building, awaiting review: (a) grounding: every compiled grant and target must quote the user, and one-turn verbs must quote the latest turn; (b) the compiler sees attribute values only for short categorical attributes (at most 8 distinct identifiers); (c) the provenance question needs a majority of 3 samples and a quote found in the tool output; citations need all 3 samples to verify; the residual-risk flag needs all 3 to agree; sampling temperature 0.7; (d) four hand-written exemplars; (e) the compiler runs once per conversation state, on all user turns; (f) delegated documents are not compiled yet | M5 |
-| Q12 | Rule gaps the FS/DB dev benchmark found (needs debate before rule changes): (a) **read minimization**: SR-READ allows any read inside the envelope, so reading a colleague's tickets, other customers' rows or unneeded columns passes. Should reads of targets outside the contract be narrowed (Minimize to covered rows/columns/files) or asked, and for all data or only S2+ (leaving coding agents free to explore S0/S1 workspace files)? (b) **write targets**: SW-WRITE allows any write inside the envelope (chosen for reversible workspace files), so updating other people's orders or extra columns passes. Needs a way to tell workspace files from records, e.g. a `target_class` fact or contract targets that cover the workspace for coding tasks. (c) **named destinations**: a read feeding an upload to a host the request names has sink `remote_other`, so SR-EXPOSED asks (all fs-share benign FP). Proposal: a `remote_named` sink class, mirroring `recipient_named` | M4 |
+| Q12 | Rule gaps the FS/DB dev benchmark found (needs debate before rule changes): (a) ~~read minimization~~ **decided 2026-10-30: A5, class-gated**; (b) ~~write targets~~ **decided 2026-10-30: B3, record writes**; (c) ~~named destinations~~ **decided 2026-10-30: C2, remote_named** (see §12). Resolved; was: (a) **read minimization**: SR-READ allows any read inside the envelope, so reading a colleague's tickets, other customers' rows or unneeded columns passes. Should reads of targets outside the contract be narrowed (Minimize to covered rows/columns/files) or asked, and for all data or only S2+ (leaving coding agents free to explore S0/S1 workspace files)? (b) **write targets**: SW-WRITE allows any write inside the envelope (chosen for reversible workspace files), so updating other people's orders or extra columns passes. Needs a way to tell workspace files from records, e.g. a `target_class` fact or contract targets that cover the workspace for coding tasks. (c) **named destinations**: a read feeding an upload to a host the request names has sink `remote_other`, so SR-EXPOSED asks (all fs-share benign FP). Proposal: a `remote_named` sink class, mirroring `recipient_named` | M4 |
 | Q11 | Accepted for now 2026-10-27 (revisit during testing). M3 choices made while building: (a) soft outcome = most restrictive matching row, Ask when none matches; (b) a verified citation lowers the soft layer to Allow (not one step); (c) the residual-risk escalation sits beside the floor, so a citation cannot lower it; (d) the nine invariants and twenty soft rows as written; (e) opaque programs are Ask until the sandbox exists (INV-6), then the soft layer allows them for judgment in the sandbox; (f) Minimize narrows within one effect only: an action of separate commands where one is unrequested (`rm a && rm x`) is asked about whole. Dropping such sub-commands belongs with the Minimize executor (P3) | M3 |
 | Q10 | Accepted for now 2026-10-27 (revisit during testing). M2 choices made while building: (a) one fact record per effect, action outcome = join; (b) schema extensions: `unresolved` fact, `unknown` values for sensitivity / sink / volume / security change, `none` sink, residual-risk categories; (c) write grants last the session; (d) unknown sensitivity counts as S3 in the envelope check; (e) `session_chain` counts only reads known to be S2+; (f) `volume` bucket edges (3 / 20, ×4 of the expectation) are placeholders until M4; (g) the built-in path catalog; (h) AmPermBench catalog says its resources are S1, and its admin profile allows the git remote `origin` | M2 |
 
@@ -548,6 +577,10 @@ targets, and a read feeding a requested upload counts as exposed. These are Q12.
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-10-30 | Q12 implemented as decided: fact `target_class` and sink `remote_named` (schema regenerated), recipients named by the contract, soft table `q12-1`, directory reads take the strictest class and highest sensitivity of the files below, listings (`git branch`, `squeue`, `kubectl get`, `aws s3 ls`) marked as listings, and the code-explore dev family. Bounds: stand-in contract 0% / 0% on FS/DB and AmPermBench |
+| 2026-10-30 | Q12(c) decided: **C2, a `remote_named` sink class.** Egress to a host the contract's targets cover is `remote_named`, and so is a read whose data goes only there; both the read and the upload stay checked (two locks). `recipient_named` is aligned to mean covered by the contract's recipient targets (was: mentioned in a user turn). Egress grants from a user turn cover named and allowlisted destinations only. Measured with A5 + B3 and the oracle contract: C1 today 15.2% FPR (all fs-share benign uploads asked); C2 and C3 (drop SR-EXPOSED, egress decides) both 0.0% FPR, 0.0% FNR on FS/DB and AmPermBench; C2 chosen on principle |
+| 2026-10-30 | Q12(b) decided: **B3, record writes narrowed.** Writes of records and resources outside the contract are narrowed (Minimize: fewer rows, fewer SET columns), or Ask when none is covered; workspace writes stay free (reversible in the sandbox, Q10c). The `target_class` domain: `workspace` (project code, docs, configs; listings), `record` (database rows, columns, tables; data directories the admin catalog marks), `resource` (branches, jobs, services, storage objects), `system` (OS paths, already protected by the catalog). Classes come from admin catalog rules by path and from kind defaults; unknown files default to workspace. The exploration family also gets benign workspace writes. Measured with the oracle contract and A5 reads: B1 today 13.0% FNR (db-update 77.8%); B2 every write and B3 both 0.0% (they differ only on workspace writes, absent from the dev set) |
+| 2026-10-30 | Q12(a) decided: **A5, class-gated read minimization.** A new fact `target_class` (workspace / record / ...) comes from the admin catalog and kind defaults (database rows are records). Reads of *records* outside the contract are narrowed to the covered targets (Minimize), or Ask when none is covered, whatever their sensitivity; reads of workspace files stay free to explore under the envelope's ceiling. Listings read names only and stay free. The dev benchmark gains an exploration family (benign reads of unnamed workspace files, harmful reads of records) so the exploration cost is measured. Measured with the oracle contract before deciding: A1 today 46.0% FNR; A2 all reads 13.0%; A3 S2+ only 36.0%; A3+ (row selections inherit the sensitivity of returned columns) 19.3%; A5 behaves like A2 on the dev set, whose reads all touch records. Implementation waits for Q12(b), which shares the fact |
 | 2026-10-30 | AutoDL GPUs are scarce by day: prepare in no-GPU mode, measure unattended at night, replay from the cache on Windows. Overnight kit built and dry-run tested |
 | 2026-10-27 | Q6: the gate's GPU is an AutoDL RTX 4090 (24 GB). Model ladder starts at Qwen3.5-4B; vLLM 0.31.0 pinned; client drops `guided_json`, adds `structured_outputs` and a smoke check |
 | 2026-10-27 | Q11 accepted for now. M4 built (sqlglot 30.22 added). Bug fixes found by the dev benchmark: INV-7 now spares destinations the request names (its stated intent); the FS/DB oracle contract takes its ceiling from files and columns, not row selections. Rule gaps open as Q12 |

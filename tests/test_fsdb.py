@@ -17,8 +17,11 @@ PROMPTS = fsdb.prompts()
 RECORDS = fsdb.probe_records()
 
 
-def test_six_families_each_a_full_4x4x2_matrix():
-    assert len(PROMPTS) == 192 and len({p.prompt_id for p in PROMPTS}) == 192
+CANDIDATE_FAMILIES = [p for p in PROMPTS if not p.prompt_id.startswith("FX")]  # the T/P/F candidate structure
+
+
+def test_seven_families_each_a_full_4x4x2_matrix():
+    assert len(PROMPTS) == 224 and len({p.prompt_id for p in PROMPTS}) == 224
     for code in fsdb.FAMILIES:
         cells = Counter((p.s, p.b, p.r) for p in PROMPTS if p.prompt_id.startswith(code))
         assert set(cells) == set(itertools.product(*fsdb.AXES.values())) and set(cells.values()) == {1}
@@ -58,7 +61,7 @@ def _attributes(prompt):
 
 
 def test_the_oracle_follows_from_the_request_meaning():
-    for p in PROMPTS:
+    for p in CANDIDATE_FAMILIES:
         derived = {t for t, attrs in _attributes(p).items() if fsdb.selects(p.b, *attrs)}
         main = {t for t in p.authorized if t in _attributes(p)}
         assert main == derived, p.prompt_id
@@ -70,7 +73,7 @@ def test_oracle_sets_are_consistent():
         assert p.authorized and p.must_preserve and p.authorized <= p.universe and p.must_preserve <= p.universe
         assert not p.authorized & p.must_preserve
         assert p.protected <= p.must_preserve and not p.authorized & p.protected
-        assert len(p.protected) == (2 if p.r == "R1" else 1)
+        assert len(p.protected) == (0 if p.prompt_id.startswith("FX") else 2 if p.r == "R1" else 1)
 
 
 def test_protected_decoys_are_protected_in_the_environment():
@@ -115,10 +118,27 @@ def test_snapshots_hold_the_lane_data():
     assert staging.tables["audit_log"].protected
 
 
-@pytest.mark.parametrize("code", list(fsdb.FAMILIES))
+def test_the_coding_task_authorizes_the_workspace_and_names_only_the_tests():
+    """Re-derived from the catalog: the benign targets are exactly the universe's workspace-class
+    paths under the project, and the request names only the failing test(s)."""
+    from dmgate.facts.catalog import Catalog
+
+    for p in (p for p in PROMPTS if p.prompt_id.startswith("FX")):
+        env = fsdb.ENVIRONMENTS[p.r]
+        catalog, registry = Catalog.from_environment(env), Registry.from_environment(env)
+        workspace = {t for t in p.universe if t.startswith(f"{env['cwd']}/app")
+                     and catalog.target_class("file", t, registry.get("file", t))[0] == "workspace"}
+        assert p.authorized == workspace, p.prompt_id
+        assert p.named <= p.authorized and {t.rsplit("/", 1)[-1] for t in p.named} <= {"test_dates.py", "test_timezones.py"}
+        assert len(p.named) == (1 if p.b in ("B0", "B1") else 2)
+
+
+@pytest.mark.parametrize("code", [c for c in fsdb.FAMILIES if c != "FX"])
 def test_with_the_oracle_contract_coverage_matches_every_label(code):
     """Plumbing: given a perfect contract, every effect's labeled targets are inside it exactly when
-    the probe is benign. Not tuning, and not a result (the contract comes from ground truth)."""
+    the probe is benign. Not tuning, and not a result (the contract comes from ground truth). The
+    coding family is excluded on purpose: its benign probes pass because the workspace is free
+    (policy), not because the contract covers them; its check is the gate bound (test_rule_gate)."""
     contracts = {p.prompt_id: fsdb.oracle_contract(p) for p in PROMPTS if p.prompt_id.startswith(code)}
     for r in RECORDS:
         if r.cluster_id not in contracts:

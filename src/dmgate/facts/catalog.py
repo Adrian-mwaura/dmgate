@@ -7,6 +7,10 @@ Answers three questions about a target, deterministically:
   default for the kind. Nothing matched means unknown (None). The LLM fact filler may classify it.
 - **Protection.** The registry attribute `protected`, or a protected-path rule.
 - **Security relevance** of a change to a file: auth, ci, permissions, network or deps.
+- **Class** (Q12): workspace (the project's code, docs and configs: free to explore and edit), record
+  (business data: database rows, data directories the admin marks), resource (platform resources:
+  remote branches, jobs, services, storage objects), system (OS paths), destination (hosts and
+  recipients), program (opaque code). Admin rules give file classes by path; kinds have defaults.
 
 Path rules are first-match, so exceptions sit above the general rules. A pattern without "/"
 matches the file name; one with "/" matches the whole normalized path. Patterns use fnmatch, where
@@ -108,6 +112,13 @@ PERMISSION_COMMANDS = frozenset({"chmod", "chown", "chgrp", "setfacl", "chattr"}
 # Kinds whose content is workspace metadata: refs and commit history. Environments may override.
 BUILTIN_KIND_DEFAULTS = {"repo": "S0", "branch": "S0"}
 
+# Default class per kind (Q12). Files default to workspace unless a rule says otherwise; a local
+# branch is the agent's own work, a remote one is shared.
+KIND_CLASSES = {"row": "record", "column": "record", "table": "record", "job": "resource", "service": "resource",
+                "object": "resource", "repo": "workspace", "host": "destination", "recipient": "destination",
+                "process": "program"}
+CLASS_PRECEDENCE = ("workspace", "system", "resource", "record")  # an effect takes its strictest target's class
+
 # Database columns by name, when the schema does not label them (first match; fnmatch on the column
 # name). A starting catalog like the path rules: admins label their schemas.
 BUILTIN_COLUMN_SENSITIVITY: tuple[PathRule, ...] = (
@@ -133,9 +144,12 @@ class Catalog:
     """The platform's catalog for one environment: admin rules first, then the built-in rules."""
 
     def __init__(self, rules: tuple[PathRule, ...] = (), protected: tuple[PathRule, ...] = (),
-                 kind_defaults: Mapping[str, str] | None = None, protected_paths: frozenset[str] = frozenset()):
+                 kind_defaults: Mapping[str, str] | None = None, protected_paths: frozenset[str] = frozenset(),
+                 classes: tuple[PathRule, ...] = ()):
         self.sensitivity_rules = (*rules, *BUILTIN_SENSITIVITY)
         self.protected_rules = (*protected, *BUILTIN_PROTECTED)
+        self.class_rules = (*classes, *(PathRule(r.pattern, "system", r.rule_id) for r in BUILTIN_PROTECTED
+                                        if r.rule_id == "system-path"))
         self.kind_defaults = {**BUILTIN_KIND_DEFAULTS, **(kind_defaults or {})}
         self.protected_paths = protected_paths
         for level in (*self.kind_defaults.values(), *(r.value for r in rules)):
@@ -144,19 +158,23 @@ class Catalog:
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, Any]) -> Catalog:
-        """`environment["catalog"]` = {"rules": [{"pattern", "sensitivity"?, "protected"?, "id"?}],
+        """`environment["catalog"]` = {"rules": [{"pattern", "sensitivity"?, "protected"?, "class"?, "id"?}],
         "kind_defaults": {kind: level}}. The root, the home and the working directory themselves are
         always protected: deleting one of them wipes everything below."""
         spec = environment.get("catalog", {})
-        rules, protected = [], []
+        rules, protected, classes = [], [], []
         for i, r in enumerate(spec.get("rules", ())):
             rule_id = r.get("id", f"admin-{i}")
             if "sensitivity" in r:
                 rules.append(PathRule(r["pattern"], r["sensitivity"], rule_id))
             if r.get("protected"):
                 protected.append(PathRule(r["pattern"], "protected", rule_id))
+            if "class" in r:
+                if r["class"] not in CLASS_PRECEDENCE:
+                    raise ValueError(f"unknown file class {r['class']!r}")
+                classes.append(PathRule(r["pattern"], r["class"], rule_id))
         roots = {"/", *(environment[k] for k in ("home", "cwd") if environment.get(k))}
-        return cls(tuple(rules), tuple(protected), spec.get("kind_defaults"), frozenset(roots))
+        return cls(tuple(rules), tuple(protected), spec.get("kind_defaults"), frozenset(roots), tuple(classes))
 
     def sensitivity(self, kind: str, target: str | None, resource: Resource | None) -> tuple[str | None, str]:
         """(level or None, where it came from)."""
@@ -184,6 +202,19 @@ class Catalog:
             if rule is not None:
                 return True, f"catalog:{rule.rule_id}"
         return False, "not protected"
+
+    def target_class(self, kind: str, target: str, resource: Resource | None) -> tuple[str, str]:
+        """(class, where it came from) for one target (Q12)."""
+        if resource is not None and resource.attrs.get("class") in CLASS_PRECEDENCE:
+            return resource.attrs["class"], "registry"
+        if kind == "file":
+            rule = first_match(self.class_rules, target)
+            if rule is not None:
+                return rule.value, f"catalog:{rule.rule_id}"
+            return "workspace", "default for files"
+        if kind == "branch":
+            return ("resource", "remote branch") if target.startswith("origin/") else ("workspace", "local branch")
+        return KIND_CLASSES.get(kind, "resource"), f"default for {kind}"
 
     @staticmethod
     def column_security(column: str, resource: Resource | None) -> tuple[str, str]:

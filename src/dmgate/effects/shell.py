@@ -18,7 +18,7 @@ import posixpath
 import re
 import urllib.parse
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import tree_sitter_bash
@@ -958,7 +958,7 @@ def _git_branch(ctx: _Ctx, rest: list[Arg]) -> None:
                          tuple(a.raw for a in positional[:1] if not a.resolved), command="git branch", note="create"))
     else:
         _add(ctx, Effect(Verb.READ, "branch", frozenset(r.id for r in ctx.registry.of_kind("branch")),
-                         command="git branch", note="list"))
+                         command="git branch", note=LISTING))
 
 
 _GIT_PUSH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
@@ -1059,7 +1059,7 @@ def _scancel(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
 def _squeue(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     filters, _ = _job_filter(ctx, args)
     targets = ctx.registry.select("job", lambda r: _job_matches(r, filters)) if all(v.resolved for v in filters.values()) else frozenset()
-    _add(ctx, Effect(Verb.READ, "job", targets, command=prog, note="list"))
+    _add(ctx, Effect(Verb.READ, "job", targets, command=prog, note=LISTING))
 
 
 def _scontrol(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
@@ -1106,7 +1106,7 @@ def _kubectl(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
     if verb_text == "rollout" and len(positional) > 1 and positional[1].text in _ROLLOUT_VERBS:
         verb, objects, label = _ROLLOUT_VERBS[positional[1].text], positional[2:], f"rollout {positional[1].text}"
     elif verb_text in _KUBECTL_VERBS:
-        verb, objects, label = _KUBECTL_VERBS[verb_text], positional[1:], verb_text
+        verb, objects, label = _KUBECTL_VERBS[verb_text], positional[1:], LISTING if verb_text == "get" else verb_text
     else:
         _add(ctx, _opaque(prog, args, f"kubectl {verb_text}"))
         return
@@ -1233,9 +1233,9 @@ def _aws(ctx: _Ctx, prog: str, args: list[Arg]) -> None:
             _add(ctx, _s3_effect(ctx, Verb.DELETE, operands[0], recursive, rest, cmd))
         elif op == "ls":
             if operands:
-                _add(ctx, _s3_effect(ctx, Verb.READ, operands[0], True, rest, cmd))
+                _add(ctx, replace(_s3_effect(ctx, Verb.READ, operands[0], True, rest, cmd), note=LISTING))
             else:
-                _add(ctx, Effect(Verb.READ, "object", frozenset(), command=cmd, note="list buckets"))
+                _add(ctx, Effect(Verb.READ, "object", frozenset(), command=cmd, note=LISTING))
         elif op in ("cp", "mv", "sync") and len(operands) >= 2:
             src, dst = operands[0], operands[1]
             whole = recursive or op == "sync"

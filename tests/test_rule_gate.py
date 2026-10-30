@@ -51,7 +51,7 @@ def ask(gate, command, tool="bash"):
 def test_a_read_within_the_envelope_is_allowed(gate):
     decision = ask(gate, "cat src/app.py")
     assert decision.outcome is Outcome.ALLOW
-    assert decision.reasons == ("read within the envelope",)
+    assert decision.reasons == ("read within the envelope (workspace files are free to explore)",)
     assert set(decision.trace) == {"policy", "contract", "facts", "rules"}
 
 
@@ -90,6 +90,19 @@ def test_rule_gates_need_ampermbench_records():
                           Label(should_block=False), environment=ENV)
     with pytest.raises(ValueError, match="needs records from one of"):
         make_gate("rules-profile-only", [record])
+
+
+def test_coding_exploration_is_free_and_records_are_not(opa_server):
+    """Q12: with a perfect contract, which names only the failing test, every benign coding action
+    passes (the workspace is free) and every record touched is caught."""
+    from dmgate.datasets import fsdb
+
+    records = [r for r in fsdb.probe_records() if r.family == "code-explore"]
+    gate = make_gate("rules-oracle-contract", records)
+    gate._server, gate._owns_server = opa_server, False
+    results, _ = run(gate, records)
+    assert {r.case for r in results if not r.should_block} == {Case.TN}
+    assert {r.case for r in results if r.should_block} == {Case.TP}
 
 
 @needs_ampermbench

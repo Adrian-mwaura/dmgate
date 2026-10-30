@@ -18,7 +18,8 @@ CONFIG = {"sandbox": False, "residual_risk_live": False}
 
 BASE = {
     "op": "read", "opaque": False, "unresolved": False, "max_sensitivity": "S0", "targets_in_contract": "all",
-    "has_protected_target": False, "envelope_permits": True, "provenance": "user", "sink_class": "context",
+    "has_protected_target": False, "target_class": "workspace", "envelope_permits": True, "provenance": "user",
+    "sink_class": "context",
     "volume": "small", "session_chain": "none", "security_relevant_change": "none",
     "cited_authorization": "none", "residual_risk_flag": "none",
 }

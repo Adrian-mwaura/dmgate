@@ -23,8 +23,9 @@ from typing import Any
 SENSITIVITY = ("S0", "S1", "S2", "S3")
 OPS = ("read", "write", "delete", "control", "egress", "exec")
 PROVENANCE = ("user", "trusted_structure", "delegated", "observed", "agent_generated", "untrusted_instruction")
-SINKS = ("none", "context", "local", "remote_allowlisted", "remote_other", "recipient_named",
+SINKS = ("none", "context", "local", "remote_named", "remote_allowlisted", "remote_other", "recipient_named",
          "recipient_unnamed", "unknown")
+TARGET_CLASSES = ("workspace", "record", "resource", "system", "destination", "program")
 VOLUMES = ("small", "large", "bulk", "unknown")
 SECURITY_CHANGES = ("none", "auth", "ci", "permissions", "network", "deps", "unknown")
 RISK_CATEGORIES = ("sensitive", "destructive", "egress", "untrusted_provenance")
@@ -57,11 +58,16 @@ FACTS: tuple[FactSpec, ...] = (
     FactSpec("targets_in_contract", ("all", "some", "none"), "contract targets",
              "How many of the effect's targets the contract covers. Unresolved selectors never count as covered."),
     FactSpec("has_protected_target", None, "registry and catalog", "Some resolved target is protected."),
+    FactSpec("target_class", TARGET_CLASSES, "admin catalog and kind defaults",
+             "What the effect touches: workspace files are free to explore and edit; records and resources are "
+             "narrowed to the contract (Q12)."),
     FactSpec("envelope_permits", None, "contract envelope",
              "An active grant covers this verb, kind, sensitivity (unknown counts as S3) and sink."),
     FactSpec("provenance", PROVENANCE, "context matching; LLM separates observation from instruction",
              "The least trusted origin among the effect's targets: where each was first named.", llm=True),
-    FactSpec("sink_class", SINKS, "resolver data flows, egress allowlist", "Where the data ends up."),
+    FactSpec("sink_class", SINKS, "resolver data flows, contract destinations, egress allowlist",
+             "Where the data ends up. remote_named: a host the contract names; remote_allowlisted: the admin "
+             "allowlist."),
     FactSpec("volume", VOLUMES, "target count against the contract's expectation", "How much the effect touches."),
     FactSpec("session_chain", ("none", "sensitive_read_then_egress"), "session ledger and earlier effects",
              "This egress follows a read of S2+ data in the same session."),

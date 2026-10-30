@@ -1,12 +1,30 @@
 {
   "description": "Soft rules (DESIGN.md §6.6, layer 2). Each row is a box in the fact space: every fact it names must take one of the listed values; facts it does not name are unconstrained. An effect's soft outcome is the most restrictive matching row, or ask when none matches. Written from the design, never tuned on AmPermBench. The lifecycle loop (P4) patches this table; loosening patches need the promotion gate.",
-  "version": "m3-1",
+  "version": "q12-1",
   "rows": [
     {
       "id": "SR-READ",
-      "when": {"op": ["read"], "envelope_permits": [true], "sink_class": ["context", "local", "remote_allowlisted"]},
+      "when": {"op": ["read"], "envelope_permits": [true], "sink_class": ["context", "local", "remote_named", "remote_allowlisted"], "target_class": ["workspace", "system", "destination", "program"]},
       "outcome": "allow",
-      "reason": "read within the envelope"
+      "reason": "read within the envelope (workspace files are free to explore)"
+    },
+    {
+      "id": "SR-READ-REQUESTED",
+      "when": {"op": ["read"], "envelope_permits": [true], "sink_class": ["context", "local", "remote_named", "remote_allowlisted"], "target_class": ["record", "resource"], "targets_in_contract": ["all"]},
+      "outcome": "allow",
+      "reason": "read of the records the request names"
+    },
+    {
+      "id": "SR-READ-NARROW",
+      "when": {"op": ["read"], "envelope_permits": [true], "target_class": ["record", "resource"], "targets_in_contract": ["some"]},
+      "outcome": "minimize",
+      "reason": "narrowed to the records the request names (Q12a)"
+    },
+    {
+      "id": "SR-READ-UNREQUESTED",
+      "when": {"op": ["read"], "target_class": ["record", "resource"], "targets_in_contract": ["none"]},
+      "outcome": "ask",
+      "reason": "reading records the request does not name (Q12a)"
     },
     {
       "id": "SR-CEILING",
@@ -24,11 +42,33 @@
       "id": "SW-WRITE",
       "when": {
         "op": ["write"], "envelope_permits": [true], "has_protected_target": [false],
-        "security_relevant_change": ["none"],
+        "security_relevant_change": ["none"], "target_class": ["workspace", "system", "destination", "program"],
         "provenance": ["user", "trusted_structure", "delegated", "observed", "agent_generated"]
       },
       "outcome": "allow",
-      "reason": "ordinary write within the envelope (reversible in the sandbox)"
+      "reason": "ordinary workspace write within the envelope (reversible in the sandbox)"
+    },
+    {
+      "id": "SW-WRITE-REQUESTED",
+      "when": {
+        "op": ["write"], "envelope_permits": [true], "has_protected_target": [false],
+        "security_relevant_change": ["none"], "target_class": ["record", "resource"], "targets_in_contract": ["all"],
+        "provenance": ["user", "trusted_structure", "delegated", "observed", "agent_generated"]
+      },
+      "outcome": "allow",
+      "reason": "write to the records the request names"
+    },
+    {
+      "id": "SW-WRITE-NARROW",
+      "when": {"op": ["write"], "envelope_permits": [true], "target_class": ["record", "resource"], "targets_in_contract": ["some"]},
+      "outcome": "minimize",
+      "reason": "narrowed to the records the request names (Q12b)"
+    },
+    {
+      "id": "SW-WRITE-UNREQUESTED",
+      "when": {"op": ["write"], "target_class": ["record", "resource"], "targets_in_contract": ["none"]},
+      "outcome": "ask",
+      "reason": "writing records the request does not name (Q12b)"
     },
     {
       "id": "SW-REQUESTED-SECURITY",
@@ -111,7 +151,7 @@
       "id": "SE-REQUESTED",
       "when": {
         "op": ["egress"], "envelope_permits": [true], "targets_in_contract": ["all"],
-        "sink_class": ["remote_allowlisted", "remote_other", "recipient_named"]
+        "sink_class": ["remote_named", "remote_allowlisted", "recipient_named"]
       },
       "outcome": "allow",
       "reason": "egress to a destination the request names"

@@ -12,7 +12,8 @@ TABLE = SoftTable.load()
 
 BASE = {
     "op": "read", "opaque": False, "unresolved": False, "max_sensitivity": "S0", "targets_in_contract": "all",
-    "has_protected_target": False, "envelope_permits": True, "provenance": "user", "sink_class": "context",
+    "has_protected_target": False, "target_class": "workspace", "envelope_permits": True, "provenance": "user",
+    "sink_class": "context",
     "volume": "small", "session_chain": "none", "security_relevant_change": "none",
     "cited_authorization": "none", "residual_risk_flag": "none",
 }
@@ -117,6 +118,28 @@ def test_egress_to_unnamed_unapproved_destinations_is_never_allowed():
     for c, outcome in _soft_cells(op={"egress"}, targets_in_contract={"some", "none"},
                                   sink_class={"remote_other", "recipient_unnamed", "unknown"}):
         assert outcome >= Outcome.ASK, describe(c)
+
+
+def test_reads_and_writes_of_records_outside_the_request_are_narrowed_or_asked():  # Q12 (a), (b)
+    for op in ("read", "write"):
+        for c, outcome in _soft_cells(op={op}, target_class={"record", "resource"}, targets_in_contract={"some"}):
+            assert outcome >= Outcome.MINIMIZE, describe(c)
+        for c, outcome in _soft_cells(op={op}, target_class={"record", "resource"}, targets_in_contract={"none"}):
+            assert outcome >= Outcome.ASK, describe(c)
+
+
+def test_exploring_the_workspace_stays_free():  # Q12 (a), (b): nothing narrows it beyond today's rules
+    explore = point(op="read", targets_in_contract="none", target_class="workspace", provenance="observed")
+    assert TABLE.decide(explore) is Outcome.ALLOW
+    edit = point(op="write", targets_in_contract="none", target_class="workspace", sink_class="local")
+    assert TABLE.decide(edit) is Outcome.ALLOW
+    assert TABLE.decide(point(op="read", target_class="record", targets_in_contract="none")) is Outcome.ASK
+
+
+def test_a_named_destination_is_not_an_exposure():  # Q12 (c)
+    feeding = point(op="read", sink_class="remote_named")
+    assert TABLE.decide(feeding) is Outcome.ALLOW
+    assert TABLE.decide(point(op="read", sink_class="remote_other")) is Outcome.ASK
 
 
 def test_unreviewed_writes_wait_for_review():

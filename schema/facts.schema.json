@@ -55,6 +55,18 @@
             "description": "Some resolved target is protected.",
             "type": "boolean"
           },
+          "target_class": {
+            "description": "What the effect touches: workspace files are free to explore and edit; records and resources are narrowed to the contract (Q12).",
+            "type": "string",
+            "enum": [
+              "workspace",
+              "record",
+              "resource",
+              "system",
+              "destination",
+              "program"
+            ]
+          },
           "envelope_permits": {
             "description": "An active grant covers this verb, kind, sensitivity (unknown counts as S3) and sink.",
             "type": "boolean"
@@ -72,12 +84,13 @@
             ]
           },
           "sink_class": {
-            "description": "Where the data ends up.",
+            "description": "Where the data ends up. remote_named: a host the contract names; remote_allowlisted: the admin allowlist.",
             "type": "string",
             "enum": [
               "none",
               "context",
               "local",
+              "remote_named",
               "remote_allowlisted",
               "remote_other",
               "recipient_named",
@@ -143,6 +156,7 @@
           "max_sensitivity",
           "targets_in_contract",
           "has_protected_target",
+          "target_class",
           "envelope_permits",
           "provenance",
           "sink_class",

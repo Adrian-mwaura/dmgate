@@ -186,7 +186,7 @@ def oracle_compiler_answer(messages, schema, name):
 def test_a_perfect_compiler_reproduces_the_oracle_coverage_everywhere():
     compiler = ContractCompiler(ScriptedClient(oracle_compiler_answer), fsdb.profile_contract())
     report = compiler_report(compiler, fsdb.prompts())
-    assert report["overall"]["prompts"] == 192 and report["overall"]["exact_coverage"] == 1.0
+    assert report["overall"]["prompts"] == 224 and report["overall"]["exact_coverage"] == 1.0
     assert report["overall"]["missing_grant_prompts"] == 0 and report["overall"]["invalid_outputs"] == 0
 
 

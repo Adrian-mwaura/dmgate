@@ -25,9 +25,9 @@ from typing import Any
 
 from dmgate.contract import Contract
 from dmgate.effects import (
-    LISTING, RECURSIVE, ROW_SELECTION, SENDS_DATA, SENDS_REPOSITORY, Effect, Registry, Resolution, Verb,
+    LISTING, RECURSIVE, ROW_SELECTION, SENDS_DATA, SENDS_REPOSITORY, Effect, Registry, Resolution, Resource, Verb,
 )
-from dmgate.facts.catalog import PERMISSION_COMMANDS, Catalog, detect_secrets
+from dmgate.facts.catalog import CLASS_PRECEDENCE, KIND_CLASSES, PERMISSION_COMMANDS, Catalog, detect_secrets
 from dmgate.facts.ledger import SENSITIVE, SessionLedger
 from dmgate.facts.schema import BY_NAME, FACTS, PROVENANCE, RISK_CATEGORIES, SECURITY_CHANGES, SENSITIVITY, validate
 from dmgate.records import GateInput, Segment, Trust
@@ -35,7 +35,7 @@ from dmgate.records import GateInput, Segment, Trust
 FactValue = str | bool
 
 CEILING_VERBS = frozenset({Verb.READ, Verb.WRITE, Verb.EGRESS})  # verbs that move data
-SINK_RANK = ("none", "context", "local", "recipient_named", "remote_allowlisted", "unknown",
+SINK_RANK = ("none", "context", "local", "remote_named", "recipient_named", "remote_allowlisted", "unknown",
              "recipient_unnamed", "remote_other")  # least to most exposed
 SECURITY_PRIORITY = ("auth", "permissions", "ci", "network", "deps")
 NAME_ATTRS = ("name", "key", "path", "host", "email", "address")
@@ -219,6 +219,7 @@ class _Builder:
                 "max_sensitivity": level[i],
                 "targets_in_contract": self._in_contract(e, covered := self._covered(e)),
                 "has_protected_target": self._protected(e),
+                "target_class": self._target_class(e),
                 "provenance": self._fill(i, "provenance", self._provenance(e)),
                 "sink_class": self._sink(i),
                 "volume": self._volume(i),
@@ -276,6 +277,8 @@ class _Builder:
         uncatalogued: list[str] = []
         for t in sorted(e.targets):
             level, why = self.catalog.sensitivity(e.kind, t, self.registry.get(e.kind, t))
+            if level is None and e.kind == "file":
+                level, why = self._directory_level(t)
             if level is None:
                 uncatalogued.append(t)
             else:
@@ -291,6 +294,20 @@ class _Builder:
             return Fact("unknown", "unresolved selectors", e.unresolved)
         floor = SENSITIVITY.index(top) if top is not None else 0
         return Fact("unknown", "uncatalogued targets", tuple(uncatalogued), open=SENSITIVITY[floor:])
+
+    def _below(self, path: str) -> list[Resource]:
+        """Registered files under a directory: what a recursive read of it reaches."""
+        root = path.rstrip("/") + "/"
+        return [r for r in self.registry.of_kind("file") if r.id.startswith(root)]
+
+    def _directory_level(self, path: str) -> tuple[str | None, str]:
+        below = self._below(path)
+        if not below:
+            return None, "uncatalogued"
+        levels = [self.catalog.sensitivity("file", r.id, r)[0] for r in below]
+        if any(level is None for level in levels):
+            return None, "uncatalogued files below"
+        return _top(levels, SENSITIVITY), f"directory: the highest of {len(below)} known files below"
 
     def _sensitivity(self, i: int, own: list[Fact]) -> Fact:
         """For writes and egress, also count the data flowing in and secrets written in the command."""
@@ -348,6 +365,26 @@ class _Builder:
         return Fact(False, f"no active grant covers {wanted}", caveat)
 
     # -- registry ------------------------------------------------------------------------------
+
+    def _target_class(self, e: Effect) -> Fact:
+        """The strictest class among the targets (Q12): record > resource > system > workspace."""
+        if e.note == LISTING:
+            return Fact("workspace", "listing: names only")
+        if e.opaque or e.kind == "process":
+            return Fact("program", "a program, judged on what it does")
+        if not e.targets:  # nothing named: a file defaults to workspace, anything else to its kind's class
+            if e.kind == "file":
+                return Fact("workspace", "default for files")
+            return Fact(KIND_CLASSES.get(e.kind, "resource"), f"default for {e.kind}: no target resolved")
+        found = [(t, *self.catalog.target_class(e.kind, t, self.registry.get(e.kind, t))) for t in sorted(e.targets)]
+        if e.kind == "file":  # a directory is as strict as what it holds
+            found += [(r.id, *self.catalog.target_class("file", r.id, r)) for t in sorted(e.targets) for r in self._below(t)]
+        ranked = [c for _, c, _ in found if c in CLASS_PRECEDENCE]
+        if not ranked:
+            return Fact(found[0][1], found[0][2])
+        top = max(ranked, key=CLASS_PRECEDENCE.index)
+        hits = [(t, why) for t, c, why in found if c == top]
+        return Fact(top, hits[0][1], tuple(f"{t}: {why}" for t, why in hits[:10]))
 
     def _protected(self, e: Effect) -> Fact:
         hits = []
@@ -407,14 +444,21 @@ class _Builder:
 
     # -- data movement -------------------------------------------------------------------------
 
+    def _named(self, kind: str, target: str) -> bool:
+        """The contract's targets cover this destination: the user named it (Q12c)."""
+        return self.contract.covering_spec(kind, target, self.registry.get(kind, target), self.cwd) is not None
+
     def _egress_sink(self, e: Effect) -> tuple[str, tuple[str, ...]]:
         if e.kind == "recipient":
-            users = [s.text for s in self.request.context if s.role == "user" and s.trust is Trust.TRUSTED]
-            named = bool(e.targets) and not e.unresolved and all(
-                any(_mentions(text, r) for text in users) for r in e.targets)
+            named = bool(e.targets) and not e.unresolved and all(self._named("recipient", r) for r in e.targets)
             return ("recipient_named" if named else "recipient_unnamed"), tuple(sorted(e.targets))
-        classes = [(("remote_allowlisted" if self.contract.allowlisted(h) else "remote_other"), h)
-                   for h in sorted(e.targets)]
+
+        def host_class(h: str) -> str:
+            if self._named(e.kind, h):
+                return "remote_named"
+            return "remote_allowlisted" if self.contract.allowlisted(h) else "remote_other"
+
+        classes = [(host_class(h), h) for h in sorted(e.targets)]
         classes += [("unknown", s) for s in e.unresolved]
         if not classes:
             classes.append(("unknown", "no destination"))

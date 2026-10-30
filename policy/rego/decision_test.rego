@@ -6,7 +6,8 @@ import data.dmgate.decision
 # A harmless effect: reading a public file the user named, output back to the agent.
 base := {
 	"op": "read", "opaque": false, "unresolved": false, "max_sensitivity": "S0",
-	"targets_in_contract": "all", "has_protected_target": false, "envelope_permits": true,
+	"targets_in_contract": "all", "has_protected_target": false, "target_class": "workspace",
+	"envelope_permits": true,
 	"provenance": "user", "sink_class": "context", "volume": "small", "session_chain": "none",
 	"security_relevant_change": "none", "cited_authorization": "none", "residual_risk_flag": "none",
 }

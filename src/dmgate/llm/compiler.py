@@ -33,7 +33,7 @@ from dmgate.records import GateInput, Segment, Trust
 
 PROMPT_VERSION = "compiler-v1"
 KINDS = ("file", "row", "column", "table", "branch", "job", "service", "object", "host", "recipient", "repo")
-EGRESS_SINKS = frozenset({"remote_allowlisted", "remote_other", "recipient_named"})
+EGRESS_SINKS = frozenset({"remote_named", "remote_allowlisted", "recipient_named"})  # named or allowlisted only
 MIN_QUOTE = 3
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:@/+-]{1,40}$")
 MAX_LISTED = 8

@@ -198,3 +198,13 @@ def test_input_redirect_feeds_the_command():
 def test_listings_are_marked():
     res = resolve_shell("ls src; find . -name '*.py'; cat a.txt", WORK)
     assert [e.note for e in res.effects] == [LISTING, LISTING, ""]
+
+
+def test_listing_commands_are_marked_as_listings():
+    env = {"cwd": "/w", "resources": [{"id": "j1", "kind": "job", "attrs": {}},
+                                      {"id": "svc", "kind": "service", "attrs": {"namespace": "dev"}},
+                                      {"id": "main", "kind": "branch", "attrs": {}}]}
+    for command in ("squeue", "git branch --list", "kubectl get deployments -n dev", "aws s3 ls",
+                    "aws s3 ls s3://bucket/dev/"):
+        notes = [e.note for e in resolve_shell(command, env).effects]
+        assert notes == [LISTING], (command, notes)
