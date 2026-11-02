@@ -33,8 +33,10 @@ rung() {  # name -> "served model id|weights directory|quantization|extra vLLM f
     qwen35-9b-fp8) echo "Qwen/Qwen3.5-9B|$MODELS/Qwen3.5-9B|fp8|--language-model-only|1" ;;
     openpangu-7b) echo "openpangu/openPangu-Embedded-7B-V1.1|$MODELS/openPangu-Embedded-7B-V1.1||--trust-remote-code|1" ;;
     # An FP8 checkpoint: vLLM reads the quantization from its config. On the 3090 (no FP8 units) it keeps
-    # the weights in 8 bits and computes in 16; 31 GB of weights need two cards.
-    qwen38-27b-fp8) echo "Qwen/Qwen3.8-27B-FP8|$MODELS/Qwen3.8-27B-FP8||--language-model-only|2" ;;
+    # the weights in 8 bits and computes in 16; 31 GB of weights need two cards. Its linear-attention
+    # layers keep one state block per running sequence, and two cards hold 190 after the weights, fewer
+    # than vLLM's default 256 sequences: cap it (the evaluation runs at most 16 workers x 3 samples).
+    qwen38-27b-fp8) echo "Qwen/Qwen3.8-27B-FP8|$MODELS/Qwen3.8-27B-FP8||--language-model-only --max-num-seqs 128|2" ;;
     *) return 1 ;;
   esac
 }
