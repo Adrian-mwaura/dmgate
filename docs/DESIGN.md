@@ -521,6 +521,24 @@ After Q12 (2026-10-30), on 3,616 FS/DB probes (seven families) and 2,560 AmPermB
 The rules now lose nothing a perfect contract knows, on either benchmark; what remains is the
 contract compiler's and the fact filler's accuracy (M5, measured on the GPU server).
 
+First M5 measurements (2026-11-02; FS/DB dev data, all 3,616 probes, 880 benign and 2,736 harmful;
+vLLM 0.31.0 on one RTX 3090, PyTorch sampler, 16 workers; commit `98978ce`, run
+`20261102-0852-measure`). Dev data, so these drive compiler work; they are not test results:
+
+| Gate | FPR [95% CI] | FNR [95% CI, cluster] | Compiler exact coverage (224 prompts) | Sensitivity accuracy (99 items), under-classified |
+|---|---|---|---|---|
+| `rules-profile-only` (bound) | 60.0% | 0.0% | | |
+| `rules-llm` Qwen3.5-4B | 29.1% [26.1, 32.2] | 11.4% [8.9, 13.9] | 21.0% | 64.6%, 6.1% |
+| `rules-llm` Qwen3.5-9B (FP8 weights) | 24.0% [21.2, 26.9] | 15.8% [12.8, 19.0] | 27.2% | 65.7%, 4.0% |
+| `rules-oracle-contract` (bound) | 0.0% | 0.0% | 100% | |
+
+The compiler is the bottleneck. Both models grant verbs the request did not ask for (4B: 214 of
+224 prompts, most often `exec file`; 9B: 154) and cover targets beyond the oracle's (145; 106).
+The 9B compiles better on every compiler measure yet lets more harmful actions through, mostly in
+db-delete (FNR 3.3% to 23.8%) and fs-read (13.2% to 22.4%); the difference is not yet tested on
+paired probes. Ask carries the blocking: counting Ask as allow, FNR is about 80% for both.
+Sensitivity errors lean cautious (S1 called S2 for about half the S1 items).
+
 ### P1 milestones
 
 | # | Milestone | Validation | Needs from user |
@@ -529,7 +547,7 @@ contract compiler's and the fact filler's accuracy (M5, measured on the GPU serv
 | M2 ✅ | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact; with the oracle's contract, `targets_in_contract` reproduces all 2,560 probe labels (plumbing, not tuning) | — |
 | M3 ✅ | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor; Rego/Python agreement on every cell | OK to download the OPA binary (given) |
 | M4 ✅ | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests; resolvers recover all 3,104 probe targets | — |
-| M5 (built, awaiting endpoint) | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact (`dmgate-llm-eval`); plumbing proven with scripted models | The ZJU server account (given 2026-11-02) |
+| M5 (built; first measurements 2026-11-02) | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact (`dmgate-llm-eval`); plumbing proven with scripted models | The ZJU server account (given 2026-11-02) |
 | M6 | OpenHands runs on AmPermBench tasks (gate log-only) → test records; first end-to-end numbers, E1, E7. Task environments are our own, rebuilt from AmPermBench's data files and README (its shims are code, which `external/` rules forbid running). Agent: Qwen3.5-35B-A3B FP8, self-hosted (Q7) | Run coverage across 128 prompts | Four free RTX 3090s on the ZJU server (tensor parallelism); Docker Desktop + WSL2 on Windows |
 
 ## 10. Research contributions
@@ -580,6 +598,7 @@ contract compiler's and the fact filler's accuracy (M5, measured on the GPU serv
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-11-02 | First full M5 measurements on the FS/DB dev probes (numbers in §9 status): Qwen3.5-4B FPR 29.1%, FNR 11.4%; Qwen3.5-9B FP8 FPR 24.0%, FNR 15.8%; compiler exact coverage 21% and 27%. The compiler, not the rules or the filler, is the bottleneck; next is error analysis by replay (no GPU) before any prompt change |
 | 2026-11-02 | First runs on the ZJU server. vLLM 0.31.0 crashed warming up on the 3090: FlashInfer compiles its sampling kernel for sm_86 with nvcc, which the server lacks, so the server scripts set `VLLM_USE_FLASHINFER_SAMPLER=0` (vLLM's PyTorch sampler; the manifest records it). The evaluation sent one request at a time (21 answers a minute, the card mostly idle), so the harness and `dmgate-llm-eval` gained `--workers` (threads; results in item order; the answer cache asks a shared question once; OPA connections, the filler's per-decision log and the SQL snapshots made thread-safe). `measure.sh` uses 16. Sequential and parallel runs give identical decisions and reports on the stub. Latency is reported only from runs with one worker, since with several each decision's time includes its wait behind the others |
 | 2026-11-02 | **GPU: the ZJU International campus server only; AutoDL dropped** (the user's call). The server: 8 × RTX 3090 (24 GB, Ampere), driver 590.48 / CUDA 13.1, 96 cores, 251 GB RAM, shared with other students, no job scheduler, reachable on the campus network or VPN. Its system disk is 99% full, so the repository, environment, weights, caches and temporary files all live under `/home/part1/<user>` (4.1 TB free). Consequences: the gate ladder is unchanged (24 GB per card, as on the 4090); FP8 rungs run weight-only on Ampere (vLLM's Marlin kernels: the same memory, a little slower); the agent (Q7) moves from one big-memory card to tensor parallelism over four 3090s (two would leave about 5 GB for the attention cache), with FP8 mixture-of-experts kernels on Ampere to verify at M6 (fallback: bf16 weights, about 70 GB, on the same four cards). Scripts generalized and renamed: `server_setup.sh` (was `autodl_setup.sh`), `measure.sh` (was `overnight.sh`; claims the first free card and waits when none is, a per-user port, a per-run API key so other users cannot reach our model server), `server.ps1` (was `autodl.ps1`), and `server_env.sh`, which they share |
 | 2026-11-02 | Q7 re-decided after costing: **the agent model is self-hosted open weights** (replaces the 2026-10-30 mixed plan). Agent: Qwen3.5-35B-A3B (Apache-2.0; 36B parameters, 3B active; SWE-bench Verified 69.2% on its card) in FP8 (37.5 GB) on a big-memory AutoDL card, first choice the RTX 6000D (84 GB, Blackwell, native FP8), which also holds the gate model (Qwen3.5-4B, 9.3 GB) at the same time; RTX PRO 6000 / H20 (96 GB), H800 (80 GB), vGPU-48GB / RTX PRO 5000 (48 GB) also work. The 4090 cannot hold a capable agent (Qwen3.5-27B is 30.2 GB even at 4 bits), so it stays the gate's card; Qwen3.5-9B on it can serve later as a weaker-agent robustness slice. Considered and set aside: a frontier API model (realistic but costly at corpus scale), a cheap hosted API for the same open model (Qwen3.5-Flash; kept as a fallback only if big cards stay unavailable for days, with the user's OK and a spending cap). Cost is GPU hours only; no data leaves the platform; weights are fixed, so runs are reproducible. Trajectories are recorded once and replayed for every gate evaluation |
