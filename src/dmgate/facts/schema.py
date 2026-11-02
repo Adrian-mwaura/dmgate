@@ -74,7 +74,8 @@ FACTS: tuple[FactSpec, ...] = (
     FactSpec("security_relevant_change", SECURITY_CHANGES, "path rules; LLM on the diff",
              "The write changes authentication, CI, permissions, network setup or dependencies.", llm=True),
     FactSpec("cited_authorization", ("none", "verified"), "LLM quote, deterministic check",
-             "A quoted span of a trusted user turn authorizes this effect. Lowers soft rules only.", llm=True),
+             "A quoted span of a trusted user turn authorizes this effect and names each of its targets "
+             "unambiguously (Q3). Lowers soft rules only.", llm=True),
     FactSpec("residual_risk_flag", ("none", *RISK_CATEGORIES), "LLM holistic check",
              "A risk no other fact captured. Escalates to Ask only, alongside a risk fact.", llm=True),
 )

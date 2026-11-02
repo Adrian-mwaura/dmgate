@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
@@ -202,6 +203,7 @@ class _Builder:
         self.action_text = " ".join(v for v in request.action.args.values() if isinstance(v, str))
         self.secrets = detect_secrets(self.action_text)
         self.fills: dict[tuple[int, str], Fill] = {}
+        self._name_counts: dict[str, Counter[str]] = {}  # kind -> how many resources each name names
 
     def build(self, fills: dict[tuple[int, str], Fill]) -> ActionFacts:
         for i, name in fills:
@@ -572,4 +574,25 @@ class _Builder:
         where = verify_citation(quote, self.request.context)
         if where is None:
             return Fact("none", f"{fill.source}: citation rejected, the quote is not in a trusted user turn", (quote,))
+        unbound = self._unbound(quote, self.effects[i])
+        if unbound:
+            return Fact("none", f"{fill.source}: citation rejected, the quote does not name {', '.join(unbound[:3])}"
+                        + (f" and {len(unbound) - 3} more" if len(unbound) > 3 else ""), (quote,))
         return Fact("verified", fill.source, (quote, f"segment {where}"), confidence=fill.confidence)
+
+    def _unbound(self, quote: str, e: Effect) -> list[str]:
+        """What a citation must name but does not (Q3: target-bound). Every target of the effect,
+        each by a name no other resource of its kind shares; a quote about one account does not
+        authorize another. An effect whose targets cannot all be listed (none named, unresolved
+        parts, an opaque program) gives the quote nothing to bind to."""
+        if not e.targets or e.unresolved or e.opaque:
+            return ["targets that can be listed"]
+        return [t for t in sorted(e.targets) if not any(_mentions(quote, n) for n in self._unique_names(e.kind, t))]
+
+    def _unique_names(self, kind: str, target: str) -> set[str]:
+        """The names that identify this target alone among the resources of its kind."""
+        index = self._name_counts.get(kind)
+        if index is None:
+            index = self._name_counts[kind] = Counter(n for r in self.registry.of_kind(kind) for n in self._names(kind, r.id))
+        own = 1 if self.registry.get(kind, target) is not None else 0
+        return {n for n in self._names(kind, target) if index[n] - own == 0}

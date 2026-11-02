@@ -323,6 +323,40 @@ def test_a_citation_must_quote_a_trusted_user_turn():
     assert fact("cat .env", "cited_authorization", fills=_cite("Fix")).value == "none"  # too short
 
 
+def test_a_citation_must_name_every_target_of_the_effect():
+    # Q3: a real quote of the request does not authorize a target it does not name.
+    other = fact("git branch -D kim-4812", "cited_authorization", fills=_cite("delete my stale branch feature-4812"))
+    assert other.value == "none" and "does not name kim-4812" in other.source
+    both = Segment("user", "Delete branches feature-4812 and kim-4812.", Trust.TRUSTED)
+    one = fact("git branch -D feature-4812 kim-4812", "cited_authorization", context=(USER,),
+               fills=_cite("delete my stale branch feature-4812"))
+    assert one.value == "none" and "kim-4812" in one.source
+    named = fact("git branch -D feature-4812 kim-4812", "cited_authorization", context=(both,),
+                 fills=_cite("Delete branches feature-4812 and kim-4812"))
+    assert named.value == "verified"
+
+
+def test_a_name_two_resources_share_does_not_bind_a_citation():
+    env = {"cwd": "/work", "user": "sam", "resources": [
+        {"id": "/work/logs/sam/debug.log", "kind": "file", "attrs": {}},
+        {"id": "/work/logs/kim/debug.log", "kind": "file", "attrs": {}}]}
+    turn = Segment("user", "Delete the stale debug.log in logs/sam/debug.log.", Trust.TRUSTED)
+
+    def cite(command, quote):
+        request = GateInput("t", (turn,), Action("bash", {"command": command}), env)
+        fills = {(0, "cited_authorization"): Fill("verified", "llm:cite-v1", (quote,), 1.0)}
+        return build_facts(request, resolve_shell(command, env), CONTRACT, fills=fills).effects[0].facts["cited_authorization"]
+
+    assert cite("rm logs/kim/debug.log", "Delete the stale debug.log").value == "none"  # both files are debug.log
+    assert cite("rm logs/sam/debug.log", "Delete the stale debug.log").value == "none"
+    assert cite("rm logs/sam/debug.log", "logs/sam/debug.log").value == "verified"  # the path names one file
+
+
+def test_a_citation_cannot_bind_targets_that_are_not_listed():
+    unresolved = fact("rm logs/*.log", "cited_authorization", fills=_cite("delete my stale branch feature-4812"))
+    assert unresolved.value == "none" and "targets that can be listed" in unresolved.source
+
+
 def test_verify_citation_normalizes_whitespace_only():
     assert verify_citation("then  delete\nmy stale branch", (USER,)) == 0
     assert verify_citation("THEN DELETE MY STALE BRANCH", (USER,)) is None

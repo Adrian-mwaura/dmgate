@@ -130,7 +130,7 @@
             ]
           },
           "cited_authorization": {
-            "description": "A quoted span of a trusted user turn authorizes this effect. Lowers soft rules only.",
+            "description": "A quoted span of a trusted user turn authorizes this effect and names each of its targets unambiguously (Q3). Lowers soft rules only.",
             "type": "string",
             "enum": [
               "none",
