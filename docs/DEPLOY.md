@@ -110,6 +110,27 @@ Options for `overnight.sh`: `LADDER="qwen35-4b"` (one rung), `openpangu-7b` (aft
 with `GET=openpangu-7b bash scripts/autodl_setup.sh`), `SAMPLE=300` (a quick subsample, never for
 reported numbers), `DRY_RUN=1` (stub server, no GPU).
 
+## The agent's card (M6, Q7)
+
+The agent that generates M6's trajectories is Qwen3.5-35B-A3B in FP8 (37.5 GB of weights), which
+does not fit the 4090. It runs on a second, big-memory instance; the RTX 6000D (84 GB) is the first
+choice and holds the gate model at the same time. RTX PRO 6000 or H20 (96 GB), H800 (80 GB) and
+48 GB cards also work; A100-40GB is too tight.
+
+1. Create the instance on a big-memory card and **expand its data disk to at least 100 GB** (the
+   agent and the gate weights alone are about 47 GB). Note its SSH host and port.
+2. From Windows, push the project to it:
+   `.\scripts\autodl.ps1 -SshHost <its host> -Port <its port> -Push`
+3. In no-GPU mode on that instance, prepare it with both models:
+
+   ```bash
+   git clone /root/autodl-tmp/dmgate.bundle /root/autodl-tmp/dmgate   # first time only
+   GET="qwen35-4b qwen35-35b-a3b-fp8" bash /root/autodl-tmp/dmgate/scripts/autodl_setup.sh
+   ```
+
+Serving the agent, the task environments and the OpenHands runs come with M6; this only gets the
+slow downloads out of the way.
+
 ## Step by step, by hand
 
 ### On the AutoDL machine
