@@ -198,6 +198,14 @@ def test_ungrounded_and_stale_grants_are_dropped():
     assert [g.verb for g in fresh.grants] == [Verb.READ, Verb.DELETE]
 
 
+def test_the_notes_say_why_a_quote_was_refused():
+    target = {"kind": "file", "ids": ["/a"], "patterns": [], "where": [], "expected_count": None}
+    output = {"grants": [], "targets": [{**target, "quote": "my"}, {**target, "quote": "keep all"}]}
+    _, notes = to_contract(output, ["Delete my logs. Keep everything else."], Contract())
+    assert notes == ["dropped target file: quote 'my' is shorter than 3 characters",
+                     "dropped target file: quote 'keep all' is not in any user turn"]
+
+
 def test_an_invalid_answer_leaves_the_profile_alone():
     profile = fsdb.profile_contract()
     compiler = ContractCompiler(ScriptedClient(lambda m, s, n: {"grants": "everything"}), profile)

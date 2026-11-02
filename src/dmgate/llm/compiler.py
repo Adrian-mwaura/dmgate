@@ -248,6 +248,13 @@ def grounded(quote: str, texts: list[str]) -> bool:
     return len(q) >= MIN_QUOTE and any(q in _normalize(t) for t in texts)
 
 
+def _ungrounded(quote: str, where: str) -> str:
+    """Why `grounded` refused a quote, for the notes."""
+    if len(_normalize(quote)) < MIN_QUOTE:
+        return f"quote {quote!r} is shorter than {MIN_QUOTE} characters"
+    return f"quote {quote!r} is not in {where}"
+
+
 def to_contract(output: Mapping[str, Any], turns: list[str], profile: Contract) -> tuple[Contract, list[str]]:
     """The contract, and notes on everything dropped. Turn numbers count user turns from 0."""
     turn = len(turns) - 1
@@ -258,7 +265,7 @@ def to_contract(output: Mapping[str, Any], turns: list[str], profile: Contract) 
         scope = turns[-1:] if verb in ONE_TURN_VERBS else turns
         if not grounded(g["quote"], scope):
             where = "the latest turn" if verb in ONE_TURN_VERBS else "any user turn"
-            notes.append(f"dropped grant {verb.value}: quote {g['quote']!r} is not in {where}")
+            notes.append(f"dropped grant {verb.value}: {_ungrounded(g['quote'], where)}")
             continue
         grants.append(Grant(verb, frozenset(g["kinds"]), g["max_sensitivity"],
                             EGRESS_SINKS if verb is Verb.EGRESS else frozenset(), GrantSource.USER_TURN, turn,
@@ -266,7 +273,7 @@ def to_contract(output: Mapping[str, Any], turns: list[str], profile: Contract) 
     targets = []
     for n, t in enumerate(output["targets"]):
         if not grounded(t["quote"], turns):
-            notes.append(f"dropped target {t['kind']}: quote {t['quote']!r} is not in any user turn")
+            notes.append(f"dropped target {t['kind']}: {_ungrounded(t['quote'], 'any user turn')}")
             continue
         try:
             where = tuple(Condition(c["attr"], c["op"], c["value"] if c["op"] != "in" or isinstance(c["value"], list)
