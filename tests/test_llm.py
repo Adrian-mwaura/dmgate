@@ -41,12 +41,13 @@ class _Stub(BaseHTTPRequestHandler):
     seen: list = []
     reply: dict = {}
     status = 200
+    statuses: list = []  # per request, before falling back to `status`
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         _Stub.seen.append((self.path, dict(self.headers), body))
         payload = json.dumps(_Stub.reply).encode()
-        self.send_response(_Stub.status)
+        self.send_response(_Stub.statuses.pop(0) if _Stub.statuses else _Stub.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -61,7 +62,7 @@ def stub():
     server = HTTPServer(("127.0.0.1", 0), _Stub)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    _Stub.seen, _Stub.status = [], 200
+    _Stub.seen, _Stub.status, _Stub.statuses = [], 200, []
     yield f"http://127.0.0.1:{server.server_address[1]}/v1"
     server.shutdown()
 
@@ -98,11 +99,33 @@ def test_the_smoke_check_catches_a_server_that_ignores_the_schema(stub):
 
 
 def test_client_errors(stub):
-    _Stub.status, _Stub.reply = 500, {"error": "boom"}
-    with pytest.raises(LLMError, match="500"):
+    _Stub.status, _Stub.reply = 400, {"error": "bad request"}
+    with pytest.raises(LLMError, match="400"):
         OpenAIClient(stub, "m").complete_json([], SCHEMA)
     with pytest.raises(LLMError, match="cannot reach"):
         OpenAIClient("http://127.0.0.1:9/v1", "m", timeout=2).complete_json([], SCHEMA)
+
+
+def test_a_server_error_is_retried_then_recorded_as_no_answer(stub, tmp_path):
+    _Stub.reply = {"model": "m", "choices": [{"message": {"content": '{"level": "S1"}'}}]}
+    _Stub.statuses = [500]  # one failure, then the retry succeeds
+    assert OpenAIClient(stub, "m", retry_delay=0).complete_json([], SCHEMA).valid == [{"level": "S1"}]
+    _Stub.status, _Stub.reply = 500, {"error": "grammar rejected tokens [248046]"}
+    path = tmp_path / "c.jsonl"
+    failed = CachedClient(OpenAIClient(stub, "m", retries=1, retry_delay=0), path).complete_json([], SCHEMA)
+    assert failed.outputs == () and failed.valid == [] and "500" in failed.error
+    replay = CachedClient(OpenAIClient(stub, "m", offline=True), path).complete_json([], SCHEMA)
+    assert replay.cached and replay.valid == [] and replay.error == failed.error  # replays match the run
+    assert not smoke_check(OpenAIClient(stub, "m", retries=0))[0]
+
+
+def test_too_many_server_errors_stop_the_run(stub):
+    _Stub.status, _Stub.reply = 500, {"error": "engine dead"}
+    client = OpenAIClient(stub, "m", retries=0, max_failures=3)
+    for _ in range(3):
+        assert client.complete_json([], SCHEMA).valid == []
+    with pytest.raises(LLMError, match="4 requests got no answer"):
+        client.complete_json([], SCHEMA)
 
 
 def test_cache_replays_exact_requests(tmp_path):

@@ -43,7 +43,7 @@ rung() {  # name -> "served model id|weights directory|quantization|extra vLLM f
   esac
 }
 
-stamp="$(date +%Y%m%d-%H%M)"
+stamp="$(date +%Y%m%d-%H%M%S)"  # to the second: parallel runs never share a folder
 RUN="$stamp-measure$([[ "$DRY_RUN" == 1 ]] && echo -dry)"
 OUT="$ROOT/results/$RUN"
 mkdir -p "$OUT"
@@ -173,6 +173,10 @@ for name in $LADDER; do
   else
     log "$name: rules-llm FAILED (see $dest/rules-llm.log)"
   fi
+  for step in llm-eval rules-llm; do  # server errors that persisted are recorded as "no answer": count them
+    n="$(grep -c "no answer recorded" "$dest/$step.log" 2>/dev/null || true)"
+    [[ "${n:-0}" -gt 0 ]] && log "$name: $step: $n requests got no answer from the server (see $dest/$step.log)"
+  done
   stop_server
 done
 

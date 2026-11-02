@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -42,6 +43,7 @@ class Completion:
     model: str
     latency_ms: float = 0.0
     cached: bool = False
+    error: str = ""  # why the server gave no answer at all (then outputs and raw are empty)
 
     @property
     def valid(self) -> list[dict[str, Any]]:
@@ -67,9 +69,15 @@ STRUCTURED_MODES = ("response_format", "structured_outputs")
 
 
 class OpenAIClient:
+    """A server error (5xx) is retried; if it persists, the request gets no answer, which callers
+    treat as an invalid answer (they fail closed), and the cache records it so replays match. vLLM
+    0.31 occasionally fails one sampled request when its grammar engine rejects a token it let
+    through ("Failed to advance FSM"). More than `max_failures` such requests stop the run: a broken
+    server must not pass as empty answers. Client errors (4xx) and an unreachable server always raise."""
+
     def __init__(self, base_url: str, model: str, *, api_key: str | None = None, timeout: float = 120.0,
                  structured: str = "response_format", extra_body: dict[str, Any] | None = None,
-                 offline: bool = False):
+                 offline: bool = False, retries: int = 2, retry_delay: float = 0.5, max_failures: int = 10):
         if structured not in STRUCTURED_MODES:
             raise ValueError(f"structured must be one of {STRUCTURED_MODES} (guided_json was removed in vLLM 0.12)")
         self.base_url = base_url.rstrip("/")
@@ -79,6 +87,11 @@ class OpenAIClient:
         self.structured = structured
         self.extra_body = extra_body or {}
         self.offline = offline  # replay mode: never send a request
+        self.retries = retries
+        self.retry_delay = retry_delay
+        self.max_failures = max_failures
+        self.failures = 0
+        self._lock = threading.Lock()
 
     @property
     def fingerprint(self) -> str:
@@ -110,16 +123,33 @@ class OpenAIClient:
         request = urllib.request.Request(f"{self.base_url}/chat/completions", data=json.dumps(body).encode("utf-8"),
                                          headers=headers, method="POST")
         start = time.perf_counter()
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                reply = json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            raise LLMError(f"{error.code} from {self.base_url}: {error.read().decode('utf-8', 'replace')[:500]}") from error
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-            raise LLMError(f"cannot reach {self.base_url}: {error}") from error
+        for attempt in range(self.retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    reply = json.loads(response.read())
+                break
+            except urllib.error.HTTPError as error:
+                detail = f"{error.code} from {self.base_url}: {error.read().decode('utf-8', 'replace')[:500]}"
+                if error.code < 500:
+                    raise LLMError(detail) from error
+                if attempt < self.retries:
+                    time.sleep(self.retry_delay * (attempt + 1))
+                    continue
+                return self._no_answer(f"{detail} (after {self.retries + 1} tries)")
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+                raise LLMError(f"cannot reach {self.base_url}: {error}") from error
         texts = tuple((choice.get("message") or {}).get("content") or "" for choice in reply.get("choices", []))
         return Completion(tuple(_parse(t, schema) for t in texts), texts, reply.get("model", self.model),
                           (time.perf_counter() - start) * 1000.0)
+
+    def _no_answer(self, why: str) -> Completion:
+        with self._lock:
+            self.failures += 1
+            failures = self.failures
+        if failures > self.max_failures:
+            raise LLMError(f"{failures} requests got no answer from the server; stopping (last: {why})")
+        print(f"warning: no answer recorded: {why}", file=sys.stderr, flush=True)
+        return Completion((), (), self.model, error=why)
 
 
 class CachedClient:
@@ -155,7 +185,8 @@ class CachedClient:
                 entry = self._cache.get(key)
                 if entry is not None:
                     raw = tuple(entry["raw"])
-                    return Completion(tuple(_parse(t, schema) for t in raw), raw, entry["model"], cached=True)
+                    return Completion(tuple(_parse(t, schema) for t in raw), raw, entry["model"], cached=True,
+                                      error=entry.get("error", ""))
                 asking = self._asking.get(key)
                 if asking is None:  # nobody is asking this yet: this thread asks
                     asking = self._asking[key] = threading.Event()
@@ -165,6 +196,8 @@ class CachedClient:
             completion = self.inner.complete_json(messages, schema, name=name, n=n, temperature=temperature,
                                                   max_tokens=max_tokens, seed=seed)
             entry = {"key": key, "model": completion.model, "raw": list(completion.raw)}
+            if completion.error:
+                entry["error"] = completion.error  # replays get the same "no answer"
             with self._lock:
                 self._cache[key] = entry
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,6 +241,8 @@ def smoke_check(client: LLMClient) -> tuple[bool, str]:
         completion = client.complete_json(messages, SMOKE_SCHEMA, name="smoke", max_tokens=20)
     except LLMError as error:
         return False, f"request failed: {error}"
+    if completion.error:
+        return False, f"request failed: {completion.error}"
     raw = completion.raw[0] if completion.raw else ""
     if completion.valid and completion.valid[0]["answer"] == "yes":
         return True, f"structured outputs enforced by {completion.model}"

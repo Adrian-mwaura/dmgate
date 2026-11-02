@@ -28,7 +28,35 @@ machine, where every run replays without a GPU.
 - **A git bundle** is the whole repository in one file. Copying it over means the private GitHub
   repository is never needed on the server, and no credentials go there.
 
-## The machine
+## The machines
+
+Three shared servers, one account (`adrianmwaura`, SSH key only), all on the campus network:
+
+| SSH name | Address, port | Cards | Driver | Home (on the big disk) | Python | Use |
+|---|---|---|---|---|---|---|
+| `zju3090` | 10.105.100.232, 22 (also 10022) | 8 × RTX 3090 (Ampere) | 590.48, CUDA 13.1 | `/home/part1/<user>` | 3.12 | set up; all gate models |
+| `zju4090` | 10.105.100.176, 10022 | 8 × RTX 4090 (Ada: native FP8) | 610.43 | `/data/home/<user>` | 3.12 | set up for the 27B |
+| `zju4090b` | 10.109.92.119, 64122 | 8 × RTX 4090 | **550.144, CUDA 12.4** | `/data/home/<user>` | 3.11 | not used: the driver is likely too old for vLLM 0.31 |
+
+Their entries in `C:\Users\<you>\.ssh\config`:
+
+```
+Host zju3090
+    HostName 10.105.100.232
+    User adrianmwaura
+
+Host zju4090
+    HostName 10.105.100.176
+    Port 10022
+    User adrianmwaura
+
+Host zju4090b
+    HostName 10.109.92.119
+    Port 64122
+    User adrianmwaura
+```
+
+The scripts treat the home folder as `DATA` on every server; the details below are the 3090's.
 
 | | |
 |---|---|
@@ -73,6 +101,9 @@ The scripts are built to be good neighbours:
   users cannot send requests to your model. The key is not part of the answer cache, so replay on
   Windows needs none.
 - **Ask first** before long runs on several cards (the M6 agent takes four).
+- **Parallel runs.** Two `measure.sh` runs on one server need different ports and cards:
+  `PORT=18106 GPUS=5 LADDER=qwen35-9b-fp8 bash .../measure.sh`. Runs are named to the second,
+  so they never share a results folder. Different models write different cache files.
 
 ## Memory, in one rule
 
@@ -179,11 +210,24 @@ campus network (or the campus VPN) before any of these steps.
    Replay answers only from the cache and stops at the first request it has not seen, so a changed
    prompt is never silently answered by nobody.
 
+**Several servers.** `-Server zju4090` sends the project to, or pulls results from, another
+server; paths there are relative to its home folder. `-Push -Cache` seeds a set-up server with
+this machine's answer caches, so questions other servers already asked keep their answers and
+only new ones go to the new hardware. `-Pull` fetches every run not yet here and merges each
+run's cache by request key (`python -m dmgate.llm.merge_cache`), so no server's answers
+overwrite another's.
+
+**Server errors.** vLLM 0.31's grammar engine occasionally fails one sampled request ("Failed to
+advance FSM", HTTP 500). The client retries twice, then records "no answer" (which fails closed:
+no citation, unknown sensitivity, the profile-only contract) and caches it, so replays match;
+the run log counts such requests, and more than ten stop the run.
+
 Options for `measure.sh`: `LADDER="qwen35-4b"` (one rung), `openpangu-7b` (after downloading it
 with `GET=openpangu-7b bash scripts/server_setup.sh`), `SAMPLE=300` (a quick subsample, never for
 reported numbers), `DRY_RUN=1` (stub server, no GPU), `GPUS=3` (this card), `TP=2` (two cards per
 model), `WORKERS=16` (questions in flight at once; vLLM answers them as one batch, so the card
-is busy instead of waiting on one request; the default), `GPU_WAIT_MINUTES=30`, `PORT=18123`.
+is busy instead of waiting on one request; the default), `GPU_WAIT_MINUTES=30`, `PORT=18123`,
+`DATASET=fsdb-dev-negation` (another probe set; the LLM evaluation then is skipped).
 Latency is measured separately with `WORKERS=1`: with several workers each decision's time
 includes its wait behind the others.
 

@@ -57,13 +57,16 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 The LLM endpoint comes from `DMGATE_LLM_BASE_URL`, `DMGATE_LLM_MODEL` (optional
 `DMGATE_LLM_API_KEY`, `DMGATE_LLM_EXTRA_BODY`, `DMGATE_LLM_STRUCTURED` = `response_format` or
 `structured_outputs`; `DMGATE_LLM_REPLAY=1` answers from the cache only, no endpoint needed). The
-GPUs are the ZJU campus server's (8 × RTX 3090, 24 GB, shared with other students; campus network
-or VPN; `ssh zju3090`), running vLLM 0.31.0. Everything there lives under `/home/part1/<user>`
-(the home folder, on the big disk), never in `/tmp` (the system disk is full). The routine: `scripts/server.ps1 -Push`, prepare
-without a GPU (`scripts/server_setup.sh`), measure inside tmux with `scripts/measure.sh` (it takes
-the first free card and gives it back), `scripts/server.ps1 -Pull`, replay on Windows;
-`docs/DEPLOY.md` has the steps. Record model, vLLM version and GPU with every number (`measure.sh`
-writes a manifest). Be a good neighbour there: one card per gate model, no idle servers.
+GPUs are the ZJU campus servers' (shared with other students; campus network or VPN): `ssh zju3090`
+(8 × RTX 3090) and `ssh zju4090` (8 × RTX 4090, native FP8), running vLLM 0.31.0 (`zju4090b`'s
+driver is too old). Everything there lives in the home folder, on the big disk (`/home/part1/<user>`
+on the 3090, `/data/home/<user>` on the 4090), never in `/tmp` (the system disks are full). The
+routine: `scripts/server.ps1 -Push`, prepare without a GPU (`scripts/server_setup.sh`), measure
+inside tmux with `scripts/measure.sh` (it takes the free cards a model needs and gives them back),
+`scripts/server.ps1 -Pull` (`-Server zju4090` for the other; pulls merge answer caches), replay on
+Windows; `docs/DEPLOY.md` has the steps. Record model, vLLM version and GPU with every number
+(`measure.sh` writes a manifest). Be a good neighbour there: no more cards than a model needs, no
+idle servers.
 
 OPA 1.21.2 lives in `tools/opa/` (not committed; tests that need it skip without it). Download it
 and compare the hash with the published `.sha256` file before first use:
