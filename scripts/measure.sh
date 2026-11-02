@@ -86,14 +86,14 @@ start_server() {  # model dir quant extra logfile
   SERVER_PID=$!
 }
 
-wait_ready() {
+wait_ready() {  # 0 = ready, 1 = the server exited, 2 = still not answering after READY_MINUTES
   local tries=$((READY_MINUTES * 12))
   for ((i = 0; i < tries; i++)); do
     kill -0 "$SERVER_PID" 2>/dev/null || return 1
     curl -sf -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/v1/models" >/dev/null && return 0
     sleep 5
   done
-  return 1
+  return 2
 }
 
 stop_server() {
@@ -126,8 +126,15 @@ for name in $LADDER; do
 
   log "$name: starting $model on port $PORT"
   start_server "$model" "$dir" "$quant" "$extra" "$dest/server.log"
-  if ! wait_ready; then
-    log "$name: the server did not come up within $READY_MINUTES min (see $dest/server.log)"
+  wait_ready
+  status=$?
+  if ((status != 0)); then
+    if ((status == 1)); then
+      log "$name: the server exited while starting; the end of $dest/server.log:"
+    else
+      log "$name: the server did not answer within $READY_MINUTES min; the end of $dest/server.log:"
+    fi
+    tail -n 25 "$dest/server.log" | sed 's/^/    /' | tee -a "$OUT/run.log"
     stop_server
     continue
   fi
