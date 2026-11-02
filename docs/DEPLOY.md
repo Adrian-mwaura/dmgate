@@ -90,6 +90,7 @@ accuracy needs it:
 | 1 | `Qwen/Qwen3.5-4B` (Apache-2.0) | 4.7B | bf16, `--language-model-only` | ~9.3 GB |
 | 2 | `openpangu/openPangu-Embedded-7B-V1.1` (Huawei; OPENPANGU MODEL LICENSE 1.0) | 8.0B | bf16 | ~16 GB |
 | 3 | `Qwen/Qwen3.5-9B` (Apache-2.0) | 9.7B | `QUANT=fp8`, `--language-model-only` | ~10 GB |
+| 4 | `Qwen/Qwen3.8-27B-FP8` (Apache-2.0; August 2026, the smallest Qwen3.8) | 27B + vision encoder | its own FP8 checkpoint, `--language-model-only`, **two cards** | ~31 GB (15.5 GB per card) |
 
 - Qwen3.5 models are vision-language models; `--language-model-only` skips the vision encoder and
   frees memory for the attention cache. They think out loud by default; the extra body below turns
@@ -99,8 +100,14 @@ accuracy needs it:
   a little slower. Weights download in bf16 (~19 GB for the 9B) and are converted at load time.
 - openPangu's card documents `transformers` and Ascend NPUs, not vLLM on NVIDIA GPUs. Check that it
   loads (`vllm serve` may need `--trust-remote-code`) and read its licence before using it.
-- Larger rungs (27B and up) need two cards with tensor parallelism (`TP=2`) or 4-bit weights;
-  they come later.
+- Rung 4 runs on two cards with tensor parallelism: each card holds half of every layer, and the
+  two exchange partial results at every step. `measure.sh` reads the card count from the rung
+  (`TP=` overrides it). Its checkpoint is FP8 with block-wise scales; on the 3090, vLLM serves it
+  weight-only (as rung 3). If vLLM refuses that, the fallback is the bf16 weights (55.6 GB) on four
+  cards. Weights: `GET=qwen38-27b-fp8 bash scripts/server_setup.sh` (30.9 GB).
+- Gemma 4 26B-A4B (about 4B active parameters) and Muse Glimmer-30B were considered for rung 4:
+  Gemma's licence is not open-source, and Glimmer scores lower on instruction following (IFBench
+  77.0 against 79.5).
 
 ## Prepare, measure, replay
 

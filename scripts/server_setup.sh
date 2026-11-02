@@ -80,6 +80,7 @@ weights() {  # rung -> "model id|directory"
     qwen35-4b) echo "Qwen/Qwen3.5-4B|Qwen3.5-4B" ;;
     qwen35-9b) echo "Qwen/Qwen3.5-9B|Qwen3.5-9B" ;;
     openpangu-7b) echo "openpangu/openPangu-Embedded-7B-V1.1|openPangu-Embedded-7B-V1.1" ;;
+    qwen38-27b-fp8) echo "Qwen/Qwen3.8-27B-FP8|Qwen3.8-27B-FP8" ;;  # gate rung 3: 31 GB, two cards
     qwen35-35b-a3b-fp8) echo "Qwen/Qwen3.5-35B-A3B-FP8|Qwen3.5-35B-A3B-FP8" ;;  # the M6 agent (Q7): four cards
     *) return 1 ;;
   esac

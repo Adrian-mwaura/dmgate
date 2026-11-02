@@ -7,6 +7,7 @@
 #
 #   bash scripts/measure.sh                          # the default ladder
 #   LADDER="qwen35-4b" bash scripts/measure.sh       # one rung
+#   LADDER="qwen38-27b-fp8" bash scripts/measure.sh  # the 27B, on the two cards its rung asks for
 #   GPUS=3 bash scripts/measure.sh                   # this card, instead of the first free one
 #   DRY_RUN=1 SAMPLE=150 bash scripts/measure.sh     # no GPU: a stub server stands in for vLLM
 set -uo pipefail
@@ -19,18 +20,21 @@ LADDER="${LADDER:-qwen35-4b qwen35-9b-fp8}"
 SAMPLE="${SAMPLE:-}"              # about this many probes (every k-th); empty = all. Never for reported numbers.
 DRY_RUN="${DRY_RUN:-0}"
 GPUS="${GPUS:-auto}"              # auto = the first free cards; or a list such as 0,1
-TP="${TP:-1}"                     # cards per model (tensor parallelism)
+TP="${TP:-}"                      # cards per model (tensor parallelism); empty = what the rung asks for
 WORKERS="${WORKERS:-16}"          # questions in flight at once; vLLM batches them on the card
 GPU_WAIT_MINUTES="${GPU_WAIT_MINUTES:-120}"
 READY_MINUTES="${READY_MINUTES:-20}"
 MAX_LEN="${MAX_LEN:-16384}"
 GPU_UTIL="${GPU_UTIL:-0.90}"
 
-rung() {  # name -> "served model id|weights directory|quantization|extra vLLM flags"
+rung() {  # name -> "served model id|weights directory|quantization|extra vLLM flags|cards"
   case "$1" in
-    qwen35-4b) echo "Qwen/Qwen3.5-4B|$MODELS/Qwen3.5-4B||--language-model-only" ;;
-    qwen35-9b-fp8) echo "Qwen/Qwen3.5-9B|$MODELS/Qwen3.5-9B|fp8|--language-model-only" ;;
-    openpangu-7b) echo "openpangu/openPangu-Embedded-7B-V1.1|$MODELS/openPangu-Embedded-7B-V1.1||--trust-remote-code" ;;
+    qwen35-4b) echo "Qwen/Qwen3.5-4B|$MODELS/Qwen3.5-4B||--language-model-only|1" ;;
+    qwen35-9b-fp8) echo "Qwen/Qwen3.5-9B|$MODELS/Qwen3.5-9B|fp8|--language-model-only|1" ;;
+    openpangu-7b) echo "openpangu/openPangu-Embedded-7B-V1.1|$MODELS/openPangu-Embedded-7B-V1.1||--trust-remote-code|1" ;;
+    # An FP8 checkpoint: vLLM reads the quantization from its config. On the 3090 (no FP8 units) it keeps
+    # the weights in 8 bits and computes in 16; 31 GB of weights need two cards.
+    qwen38-27b-fp8) echo "Qwen/Qwen3.8-27B-FP8|$MODELS/Qwen3.8-27B-FP8||--language-model-only|2" ;;
     *) return 1 ;;
   esac
 }
@@ -52,18 +56,19 @@ log() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$OUT/run.log"; }
   echo "vllm: $([[ "$DRY_RUN" == 1 ]] && echo 'stub (dry run)' || "$VLLM" --version 2>/dev/null || echo unknown)"
   echo "ladder: $LADDER"
   echo "sample: ${SAMPLE:-all}"
-  echo "tensor parallel: $TP"
+  echo "tensor parallel: ${TP:-per rung}"
   echo "workers: $WORKERS"
   echo "sampler: $([[ "$VLLM_USE_FLASHINFER_SAMPLER" == 0 ]] && echo 'vLLM native (FlashInfer off)' || echo FlashInfer)"
 } >"$OUT/manifest.txt"
 cat "$OUT/manifest.txt"
 
-# Claim cards for one rung: the given list, or the first free ones, waiting for others to finish.
+# Claim N cards for one rung: the given list, or the first free ones, waiting for others to finish.
 claim_cards() {
+  local n="$1"
   [[ "$GPUS" == auto ]] || { export CUDA_VISIBLE_DEVICES="$GPUS"; return 0; }
   local cards waited=0
-  until cards="$(pick_gpus "$TP")"; do
-    ((waited == 0)) && log "waiting for $TP free card(s), up to $GPU_WAIT_MINUTES min"
+  until cards="$(pick_gpus "$n")"; do
+    ((waited == 0)) && log "waiting for $n free card(s), up to $GPU_WAIT_MINUTES min"
     ((waited >= GPU_WAIT_MINUTES)) && return 1
     sleep 60
     waited=$((waited + 1))
@@ -73,8 +78,8 @@ claim_cards() {
 
 SERVER_PID=""
 KEY=""
-start_server() {  # model dir quant extra logfile
-  local model="$1" dir="$2" quant="$3" extra="$4" logfile="$5"
+start_server() {  # model dir quant extra logfile cards
+  local model="$1" dir="$2" quant="$3" extra="$4" logfile="$5" tp="$6"
   KEY="$(new_api_key)"
   if [[ "$DRY_RUN" == 1 ]]; then
     "$PYTHON" -m dmgate.llm.stub_server --port "$PORT" --model "$model" >"$logfile" 2>&1 &
@@ -82,7 +87,7 @@ start_server() {  # model dir quant extra logfile
     local args=(serve "$dir" --served-model-name "$model" --host 127.0.0.1 --port "$PORT" --api-key "$KEY"
                 --max-model-len "$MAX_LEN" --gpu-memory-utilization "$GPU_UTIL")
     [[ -n "$quant" ]] && args+=(--quantization "$quant")
-    ((TP > 1)) && args+=(--tensor-parallel-size "$TP")
+    ((tp > 1)) && args+=(--tensor-parallel-size "$tp")
     # shellcheck disable=SC2086  # extra is a list of flags on purpose
     "$VLLM" "${args[@]}" $extra >"$logfile" 2>&1 &
   fi
@@ -110,7 +115,8 @@ trap stop_server EXIT
 
 for name in $LADDER; do
   spec="$(rung "$name")" || { log "$name: unknown rung, skipped"; continue; }
-  IFS='|' read -r model dir quant extra <<<"$spec"
+  IFS='|' read -r model dir quant extra cards <<<"$spec"
+  tp="${TP:-${cards:-1}}"
   dest="$OUT/$name"
   mkdir -p "$dest"
   if [[ "$DRY_RUN" != 1 && ! -f "$dir/config.json" ]]; then
@@ -122,13 +128,13 @@ for name in $LADDER; do
     continue
   fi
   if [[ "$DRY_RUN" != 1 ]]; then
-    claim_cards || { log "$name: no $TP free card(s) within $GPU_WAIT_MINUTES min, skipped"; continue; }
+    claim_cards "$tp" || { log "$name: no $tp free card(s) within $GPU_WAIT_MINUTES min, skipped"; continue; }
     log "$name: cards $CUDA_VISIBLE_DEVICES"
     echo "$name: cards $CUDA_VISIBLE_DEVICES" >>"$OUT/manifest.txt"
   fi
 
   log "$name: starting $model on port $PORT"
-  start_server "$model" "$dir" "$quant" "$extra" "$dest/server.log"
+  start_server "$model" "$dir" "$quant" "$extra" "$dest/server.log" "$tp"
   wait_ready
   status=$?
   if ((status != 0)); then
