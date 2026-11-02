@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import posixpath
 import sqlite3
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -65,27 +66,30 @@ class Snapshot:
                 sensitivity=t.get("sensitivity") or (max(levels, key=_LEVELS.index) if levels else None),
             )
         self._connection: sqlite3.Connection | None = None
+        self._lock = threading.RLock()  # one connection, shared by threads one query at a time
 
     def table(self, name: str) -> Table | None:
         return self.tables.get(name) or next((t for n, t in self.tables.items() if n.lower() == name.lower()), None)
 
     def connection(self) -> sqlite3.Connection:
         """An in-memory copy, built once and then opened read-only (PRAGMA query_only)."""
-        if self._connection is None:
-            db = sqlite3.connect(":memory:", check_same_thread=False)
-            for t in self.tables.values():
-                cols = ", ".join(f'"{c}"' for c in t.columns)
-                db.execute(f'CREATE TABLE "{t.name}" ({cols})')
-                marks = ", ".join("?" for _ in t.columns)
-                db.executemany(f'INSERT INTO "{t.name}" VALUES ({marks})',
-                               [tuple(row.get(c) for c in t.columns) for row in t.rows])
-            db.commit()
-            db.execute("PRAGMA query_only = ON")
-            self._connection = db
-        return self._connection
+        with self._lock:
+            if self._connection is None:
+                db = sqlite3.connect(":memory:", check_same_thread=False)
+                for t in self.tables.values():
+                    cols = ", ".join(f'"{c}"' for c in t.columns)
+                    db.execute(f'CREATE TABLE "{t.name}" ({cols})')
+                    marks = ", ".join("?" for _ in t.columns)
+                    db.executemany(f'INSERT INTO "{t.name}" VALUES ({marks})',
+                                   [tuple(row.get(c) for c in t.columns) for row in t.rows])
+                db.commit()
+                db.execute("PRAGMA query_only = ON")
+                self._connection = db
+            return self._connection
 
     def query(self, sql: str) -> list[tuple[Any, ...]]:
-        return self.connection().execute(sql).fetchall()
+        with self._lock:
+            return self.connection().execute(sql).fetchall()
 
     def resources(self) -> list[Resource]:
         out = []
@@ -114,8 +118,8 @@ _CACHE: dict[tuple[str, Any], tuple[Mapping[str, Any], Snapshot]] = {}
 def _snapshot(path: str, spec: Mapping[str, Any]) -> Snapshot:
     key = (path, spec.get("snapshot_id") or id(spec))
     cached = _CACHE.get(key)
-    if cached is None:
-        cached = _CACHE[key] = (spec, Snapshot(path, spec))  # keep spec alive so its id stays unique
+    if cached is None:  # setdefault: threads racing here all get the one snapshot that was stored
+        cached = _CACHE.setdefault(key, (spec, Snapshot(path, spec)))  # keep spec alive so its id stays unique
     return cached[1]
 
 

@@ -31,6 +31,7 @@ from dmgate.facts.schema import SENSITIVITY
 from dmgate.llm.client import STRUCTURED_MODES, CachedClient, LLMClient, OpenAIClient, smoke_check
 from dmgate.llm.compiler import ContractCompiler
 from dmgate.llm.filler import FactFiller
+from dmgate.parallel import parallel_map
 from dmgate.records import Segment, Trust
 
 
@@ -54,19 +55,20 @@ def request_grants(contract: Contract) -> frozenset[tuple[str, str]]:
     return frozenset((g.verb.value, k) for g in contract.grants if g.source is GrantSource.USER_TURN for k in g.kinds)
 
 
-def compiler_report(compiler: ContractCompiler, prompts: Iterable[fsdb.Prompt]) -> dict[str, Any]:
-    rows = []
-    for p in prompts:
+def compiler_report(compiler: ContractCompiler, prompts: Iterable[fsdb.Prompt], workers: int = 1) -> dict[str, Any]:
+    def row(p: fsdb.Prompt) -> dict[str, Any]:
         compiled = compiler.compile(_context(p), fsdb.ENVIRONMENTS[p.r])
         oracle = fsdb.oracle_contract(p)
         got, want = coverage(compiled.contract, p), coverage(oracle, p)
         granted, needed = request_grants(compiled.contract), request_grants(oracle)
-        rows.append({
+        return {
             "prompt_id": p.prompt_id, "family": p.family, "S": p.s, "B": p.b, "R": p.r,
             "exact": got == want, "over": sorted(got - want), "under": sorted(want - got),
             "missing_grants": sorted(map(list, needed - granted)), "extra_grants": sorted(map(list, granted - needed)),
             "invalid": compiled.output is None, "dropped": list(compiled.notes),
-        })
+        }
+
+    rows = parallel_map(row, prompts, workers)
 
     def summary(group: list[dict[str, Any]]) -> dict[str, Any]:
         n = len(group)
@@ -104,14 +106,14 @@ def sensitivity_items() -> list[tuple[str, str, str]]:
     return sorted(set(items))
 
 
-def sensitivity_report(filler: FactFiller, items: list[tuple[str, str, str]]) -> dict[str, Any]:
-    confusion: Counter[tuple[str, str]] = Counter()
-    rows = []
-    for kind, target, gold in items:
+def sensitivity_report(filler: FactFiller, items: list[tuple[str, str, str]], workers: int = 1) -> dict[str, Any]:
+    def row(item: tuple[str, str, str]) -> dict[str, Any]:
+        kind, target, gold = item
         fill = filler.classify(target, f"read {kind}: {target}", SENSITIVITY)
-        answer = fill.value if fill is not None else "none"
-        confusion[(gold, answer)] += 1
-        rows.append({"kind": kind, "target": target, "gold": gold, "answer": answer})
+        return {"kind": kind, "target": target, "gold": gold, "answer": fill.value if fill is not None else "none"}
+
+    rows = parallel_map(row, items, workers)
+    confusion = Counter((r["gold"], r["answer"]) for r in rows)
     n = len(rows)
     lower = sum(r["answer"] != "none" and SENSITIVITY.index(r["answer"]) < SENSITIVITY.index(r["gold"]) for r in rows)
     return {
@@ -165,6 +167,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--replay", action="store_true", default=os.environ.get("DMGATE_LLM_REPLAY") == "1",
                         help="answer from results/llm-cache only, without an endpoint (DMGATE_LLM_REPLAY=1)")
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--workers", type=int, default=1, help="questions in flight at once (the server batches them)")
     args = parser.parse_args(argv)
     if not args.model or not (args.base_url or args.replay):
         parser.error("--model and --base-url are required (or DMGATE_LLM_MODEL and DMGATE_LLM_BASE_URL; or --replay)")
@@ -182,11 +185,11 @@ def main(argv: list[str] | None = None) -> None:
     report: dict[str, Any] = {"model": args.model, "base_url": args.base_url}
     if "compiler" in tasks:
         prompts = [p for p in fsdb.prompts() if not families or p.prompt_id[:2] in families]
-        report["compiler"] = compiler_report(ContractCompiler(client, fsdb.profile_contract()), prompts)
+        report["compiler"] = compiler_report(ContractCompiler(client, fsdb.profile_contract()), prompts, args.workers)
         print("compiler:", json.dumps(report["compiler"]["overall"], indent=2))
         print("compiler by family:", json.dumps({k: v["exact_coverage"] for k, v in report["compiler"]["by_family"].items()}))
     if "sensitivity" in tasks:
-        report["sensitivity"] = sensitivity_report(FactFiller(client), sensitivity_items())
+        report["sensitivity"] = sensitivity_report(FactFiller(client), sensitivity_items(), args.workers)
         shown = {k: v for k, v in report["sensitivity"].items() if k != "answers"}
         print("sensitivity:", json.dumps(shown, indent=2))
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

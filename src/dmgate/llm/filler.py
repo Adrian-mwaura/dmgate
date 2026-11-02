@@ -20,6 +20,7 @@ re-verifies citations.
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,7 +70,15 @@ def _latest_user_turn(context: tuple[Segment, ...]) -> str:
 class FactFiller:
     client: LLMClient
     config: FillerConfig = field(default_factory=FillerConfig)
-    log: list[dict[str, Any]] = field(default_factory=list)
+    _local: threading.local = field(default_factory=threading.local, repr=False, compare=False)
+
+    @property
+    def log(self) -> list[dict[str, Any]]:
+        """The questions asked and answers given, in this thread: the gate slices it into each
+        decision's trace, so decisions made in parallel never mix their questions."""
+        if not hasattr(self._local, "log"):
+            self._local.log = []
+        return self._local.log
 
     def _ask(self, name: str, messages: Messages, schema: dict[str, Any], samples: int) -> list[dict[str, Any]]:
         temperature = self.config.temperature if samples > 1 else 0.0

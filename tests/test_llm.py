@@ -123,6 +123,43 @@ def test_the_cache_keeps_request_settings_apart(tmp_path, stub):
     assert len(_Stub.seen) == 2  # a different structured mode is a different request
 
 
+def test_threads_asking_the_same_question_share_one_request(tmp_path):
+    asked, release = threading.Event(), threading.Event()
+
+    def slow(m, s, n):
+        asked.set()
+        release.wait(5)
+        return {"level": "S1"}
+
+    inner = ScriptedClient(slow)
+    cache = CachedClient(inner, tmp_path / "c.jsonl")
+    question, answers = [{"role": "user", "content": "q"}], []
+    threads = [threading.Thread(target=lambda: answers.append(cache.complete_json(question, SCHEMA))) for _ in range(8)]
+    for t in threads:
+        t.start()
+    asked.wait(5)
+    release.set()
+    for t in threads:
+        t.join(5)
+    assert len(inner.calls) == 1 and len(answers) == 8 and {a.raw for a in answers} == {('{"level": "S1"}',)}
+    assert len((tmp_path / "c.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_a_failed_request_is_asked_again(tmp_path):
+    attempts = []
+
+    def flaky(m, s, n):
+        attempts.append(n)
+        if len(attempts) == 1:
+            raise LLMError("boom")
+        return {"level": "S0"}
+
+    cache = CachedClient(ScriptedClient(flaky), tmp_path / "c.jsonl")
+    with pytest.raises(LLMError):
+        cache.complete_json([{"role": "user", "content": "q"}], SCHEMA)
+    assert cache.complete_json([{"role": "user", "content": "q"}], SCHEMA).valid == [{"level": "S0"}]
+
+
 # -- compiler -------------------------------------------------------------------------------------
 
 def test_the_compiler_never_sees_free_form_names():
@@ -200,6 +237,38 @@ def test_the_compiled_pipeline_decides_like_the_oracle_contract(opa_server):
     _, got = run(compiled_gate, records)
     assert [d["outcome"] for d in got] == [d["outcome"] for d in expected]
     assert "compiler" in got[0]["trace"]
+
+
+def test_reports_are_the_same_in_parallel():
+    def compiler():
+        return ContractCompiler(ScriptedClient(oracle_compiler_answer), fsdb.profile_contract())
+
+    assert compiler_report(compiler(), fsdb.prompts(), workers=8) == compiler_report(compiler(), fsdb.prompts())
+    items = sensitivity_items()
+    by_name = {target: ("S0", "S1", "S2", "S3")[i % 4] for i, (_, target, _) in enumerate(items)}
+
+    def answer(messages, schema, name):
+        return {"level": next(v for t, v in by_name.items() if t in messages[-1]["content"])}
+
+    assert (sensitivity_report(FactFiller(ScriptedClient(answer)), items, workers=8)
+            == sensitivity_report(FactFiller(ScriptedClient(answer)), items))
+
+
+def test_parallel_decisions_match_sequential_ones_and_keep_their_own_questions(opa_server):
+    records = fsdb.probe_records()[::5]
+
+    def filler_answer(messages, schema, name):
+        return {"level": "S2"} if name == "sensitivity" else {}
+
+    def gate():
+        return RuleGate(ContractCompiler(ScriptedClient(oracle_compiler_answer), fsdb.profile_contract()),
+                        server=opa_server, filler=FactFiller(ScriptedClient(filler_answer)))
+
+    _, one = run(gate(), records)
+    _, many = run(gate(), records, workers=8)
+    assert [d["outcome"] for d in many] == [d["outcome"] for d in one]
+    assert [d["trace"]["filler"] for d in many] == [d["trace"]["filler"] for d in one]
+    assert sum(len(d["trace"]["filler"]) for d in one) > 0  # the filler was asked, so the traces mean something
 
 
 # -- filler ---------------------------------------------------------------------------------------

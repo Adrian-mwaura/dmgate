@@ -11,34 +11,37 @@ from pathlib import Path
 
 from dmgate.gate import ConstantGate, Gate, OracleGate
 from dmgate.outcomes import Outcome
+from dmgate.parallel import parallel_map
 from dmgate.records import ActionRecord, load_jsonl
 from dmgate.report import Result, format_summary, summarize
 from dmgate.scoring import score
 
 
-def run(gate: Gate, records: Iterable[ActionRecord]) -> tuple[list[Result], list[dict]]:
-    """Returns scored results and the raw decisions (for traces)."""
-    results, decisions = [], []
-    for record in records:
+def run(gate: Gate, records: Iterable[ActionRecord], workers: int = 1) -> tuple[list[Result], list[dict]]:
+    """Returns scored results and the raw decisions (for traces), in record order. With workers > 1,
+    decisions run on that many threads (for gates that wait on a model server); each latency then
+    includes time queued behind the others, so latency is measured with workers = 1."""
+
+    def one(record: ActionRecord) -> tuple[Result, dict]:
         start = time.perf_counter()
         decision = gate.decide(record.gate_input())
         latency_ms = (time.perf_counter() - start) * 1000.0
-        results.append(
-            Result(
-                record_id=record.record_id,
-                family=record.family,
-                cluster_id=record.cluster_id,
-                intent_key=record.intent_key,
-                should_block=record.label.should_block,
-                nontrivial=record.label.nontrivial,
-                outcome=decision.outcome,
-                case=score(record.label, decision),
-                case_ask_as_allow=score(record.label, decision, ask_blocks=False),
-                latency_ms=latency_ms,
-            )
+        result = Result(
+            record_id=record.record_id,
+            family=record.family,
+            cluster_id=record.cluster_id,
+            intent_key=record.intent_key,
+            should_block=record.label.should_block,
+            nontrivial=record.label.nontrivial,
+            outcome=decision.outcome,
+            case=score(record.label, decision),
+            case_ask_as_allow=score(record.label, decision, ask_blocks=False),
+            latency_ms=latency_ms,
         )
-        decisions.append({"record_id": record.record_id, **decision.to_dict()})
-    return results, decisions
+        return result, {"record_id": record.record_id, **decision.to_dict()}
+
+    pairs = parallel_map(one, records, workers)
+    return [r for r, _ in pairs], [d for _, d in pairs]
 
 
 def load_dataset(spec: str) -> list[ActionRecord]:
@@ -128,6 +131,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--n-boot", type=int, default=2000)
     parser.add_argument("--sample", type=int, default=None,
                         help="about this many records (every k-th), for quick checks only, never reported numbers")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="decisions in parallel (for rules-llm against a model server); latency is measured with 1")
     args = parser.parse_args(argv)
 
     records = load_dataset(args.dataset)
@@ -135,7 +140,7 @@ def main(argv: list[str] | None = None) -> None:
         records = records[::max(1, len(records) // args.sample)]
     gate = make_gate(args.gate, records)
     try:
-        results, decisions = run(gate, records)
+        results, decisions = run(gate, records, workers=args.workers)
     finally:
         close = getattr(gate, "close", None)
         if close is not None:
@@ -148,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
         for result, decision in zip(results, decisions):
             handle.write(json.dumps({**result.to_dict(), "decision": decision}, ensure_ascii=False) + "\n")
     meta = {"dataset": args.dataset, "gate": gate.name, "note": getattr(gate, "note", ""), "n_records": len(records),
-            "sampled": bool(args.sample)}
+            "sampled": bool(args.sample), "workers": args.workers}
     (out / "summary.json").write_text(json.dumps({**meta, **summary}, indent=2, default=str), encoding="utf-8")
 
     print(f"dataset={args.dataset} gate={gate.name} -> {out}")

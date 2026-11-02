@@ -19,9 +19,9 @@ machine, where every run replays without a GPU.
   is no job scheduler: you start programs yourself, on cards nobody else is using. Its address is
   a private campus one (10.x.x.x), reachable only from the campus network or through the campus VPN.
 - **tmux** keeps programs running after you disconnect: `tmux new -s measure` opens a session,
-  `Ctrl-b` then `d` detaches from it, `tmux attach -t measure` comes back. If `Ctrl-b` only prints
-  `^B`, the server's tmux uses another command key: `tmux show-options -g prefix` names it, and
-  typing `tmux detach` at a prompt inside tmux always works.
+  `Ctrl-b` then `d` detaches from it, `tmux attach -t measure` comes back. Press `Ctrl-b` once and
+  let go before `d`: a second `Ctrl-b` sends a literal `^B` to the program instead. At a prompt
+  inside tmux, typing `tmux detach` also works.
 - **SSH tunnel.** `ssh -L 8000:127.0.0.1:18xxx zju3090` makes port 8000 on the Windows machine
   forward to port 18xxx on the server, through the encrypted SSH connection. vLLM listens only on
   the server's own loopback address, so nothing is exposed to the network.
@@ -35,8 +35,8 @@ machine, where every run replays without a GPU.
 | Cards | 8 × RTX 3090, 24 GB each (Ampere) |
 | Driver | 590.48, CUDA 13.1 (vLLM's own CUDA build runs on it) |
 | CPU, memory | 96 cores, 251 GB |
-| System disk `/` | 1.8 TB, **99% full**: nothing large in your home folder or `/tmp`, ever |
-| `/home/part1` | 7 TB, 4.1 TB free: **everything goes in `/home/part1/<user>`** |
+| System disk `/` | 1.8 TB, **99% full**: nothing large in `/tmp`, ever |
+| `/home/part1` | 7 TB, 4.1 TB free: **everything goes in `/home/part1/<user>`**, your home folder |
 | Python | `python3` on the path is an old 3.5; the setup uses Ubuntu's 3.12 (`/usr/bin/python3.12`) |
 | Docker | installed, but users are not in the `docker` group, so no containers here |
 | Network | PyPI, ModelScope, GitHub and hf-mirror.com are reachable |
@@ -52,8 +52,9 @@ Everything lives in one folder (the scripts call it `DATA`; `scripts/server_env.
   cache/  tmp/     every cache and temporary file: pip, Hugging Face, ModelScope, vLLM, Triton, torch
 ```
 
-pip, vLLM and the model hubs default to `~/.cache` and `/tmp`, both on the full system disk;
-`server_env.sh` points every one of them into `DATA`, so filling them cannot break the machine.
+pip, vLLM and the model hubs default to `~/.cache` and `/tmp`; `/tmp` is on the full system disk.
+`server_env.sh` points every one of them into `DATA`, so filling them cannot break the machine and
+everything of the project stays in one place.
 
 ## Sharing the machine
 
@@ -174,7 +175,10 @@ campus network (or the campus VPN) before any of these steps.
 Options for `measure.sh`: `LADDER="qwen35-4b"` (one rung), `openpangu-7b` (after downloading it
 with `GET=openpangu-7b bash scripts/server_setup.sh`), `SAMPLE=300` (a quick subsample, never for
 reported numbers), `DRY_RUN=1` (stub server, no GPU), `GPUS=3` (this card), `TP=2` (two cards per
-model), `GPU_WAIT_MINUTES=30`, `PORT=18123`.
+model), `WORKERS=16` (questions in flight at once; vLLM answers them as one batch, so the card
+is busy instead of waiting on one request; the default), `GPU_WAIT_MINUTES=30`, `PORT=18123`.
+Latency is measured separately with `WORKERS=1`: with several workers each decision's time
+includes its wait behind the others.
 
 ## The agent (M6, Q7)
 
@@ -248,7 +252,7 @@ Qwen3.5-9B add `QUANT=fp8`.
 - AmPermBench is test-only: never put its prompts in exemplars or tune prompts on it. It stays on
   Windows (its tests skip on the server).
 - Record the model id, vLLM version, GPU and the date with every reported number.
-- Nothing large in the home folder or `/tmp` on the server; no idle model on a card.
+- Nothing large in `/tmp` on the server; no idle model on a card.
 - If the smoke check fails with `response_format`, try vLLM's own field:
   `--structured structured_outputs`, or `$env:DMGATE_LLM_STRUCTURED = "structured_outputs"`. The
   old `guided_json` field was removed in vLLM 0.12 and may be ignored silently, so the client

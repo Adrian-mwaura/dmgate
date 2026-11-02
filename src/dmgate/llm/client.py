@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -122,13 +123,18 @@ class OpenAIClient:
 
 
 class CachedClient:
-    """Answers repeated requests from a JSONL file, so an evaluation can be replayed exactly."""
+    """Answers repeated requests from a JSONL file, so an evaluation can be replayed exactly.
+
+    Safe to share between threads: a question already on its way to the model is asked once, and
+    every thread asking it waits for that one answer."""
 
     def __init__(self, inner: LLMClient, path: Path):
         self.inner = inner
         self.model = inner.model
         self.path = path
         self._cache: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._asking: dict[str, threading.Event] = {}
         if path.is_file():
             for line in path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
@@ -144,16 +150,30 @@ class CachedClient:
                       temperature: float = 0.0, max_tokens: int = 512, seed: int | None = None) -> Completion:
         key = self.key(self.model, messages, schema, name=name, n=n, temperature=temperature, max_tokens=max_tokens,
                        seed=seed, settings=getattr(self.inner, "fingerprint", ""))
-        if key in self._cache:
-            raw = tuple(self._cache[key]["raw"])
-            return Completion(tuple(_parse(t, schema) for t in raw), raw, self._cache[key]["model"], cached=True)
-        completion = self.inner.complete_json(messages, schema, name=name, n=n, temperature=temperature,
-                                              max_tokens=max_tokens, seed=seed)
-        entry = {"key": key, "model": completion.model, "raw": list(completion.raw)}
-        self._cache[key] = entry
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        while True:
+            with self._lock:
+                entry = self._cache.get(key)
+                if entry is not None:
+                    raw = tuple(entry["raw"])
+                    return Completion(tuple(_parse(t, schema) for t in raw), raw, entry["model"], cached=True)
+                asking = self._asking.get(key)
+                if asking is None:  # nobody is asking this yet: this thread asks
+                    asking = self._asking[key] = threading.Event()
+                    break
+            asking.wait()  # another thread is asking: take its answer (or ask again if it failed)
+        try:
+            completion = self.inner.complete_json(messages, schema, name=name, n=n, temperature=temperature,
+                                                  max_tokens=max_tokens, seed=seed)
+            entry = {"key": key, "model": completion.model, "raw": list(completion.raw)}
+            with self._lock:
+                self._cache[key] = entry
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        finally:
+            with self._lock:
+                del self._asking[key]
+            asking.set()
         return completion
 
 

@@ -12,8 +12,8 @@ MODELS="${MODELS:-$DATA/models}"
 [[ -w "$DATA" ]] || { echo "cannot write to $DATA: set DATA to a folder of yours on a big disk" >&2; exit 1; }
 
 # Every cache and temporary file goes under DATA, always. pip, Hugging Face, ModelScope, vLLM,
-# Triton and torch default to ~/.cache and /tmp, which on a shared server can sit on a system disk
-# that is nearly full (the server's is, 99%), and filling it breaks the machine for everyone.
+# Triton and torch default to ~/.cache and /tmp; /tmp sits on the server's system disk, which is
+# 99% full, and filling it breaks the machine for everyone.
 export XDG_CACHE_HOME="$DATA/cache"
 export PIP_CACHE_DIR="$XDG_CACHE_HOME/pip"
 export HF_HOME="$XDG_CACHE_HOME/huggingface"

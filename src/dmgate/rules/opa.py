@@ -16,6 +16,7 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -75,7 +76,9 @@ class OpaServer:
         self.process: subprocess.Popen[bytes] | None = None
         self.url = ""
         self.port = 0
-        self._connection: http.client.HTTPConnection | None = None
+        self._local = threading.local()  # one kept-alive connection per thread
+        self._connections: list[http.client.HTTPConnection] = []
+        self._lock = threading.Lock()
 
     def start(self, timeout: float = 20.0) -> OpaServer:
         port = self.port = _free_port()
@@ -98,22 +101,30 @@ class OpaServer:
         self.close()
         raise OpaError(f"OPA did not become healthy within {timeout} s")
 
+    def _connection(self) -> http.client.HTTPConnection:
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = self._local.connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+            with self._lock:
+                self._connections.append(connection)
+        return connection
+
     def _request(self, method: str, path: str, body: Any) -> Any:
-        """One request over a kept-alive connection (a new connection per call costs ~10 ms on Windows)."""
+        """One request over this thread's kept-alive connection (a new connection per call costs
+        ~10 ms on Windows). OPA answers several threads at once."""
         if self.process is None:
             raise OpaError("the OPA server is not running")
         payload = json.dumps(body).encode("utf-8")
         for attempt in (1, 2):
-            if self._connection is None:
-                self._connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+            connection = self._connection()
             try:
-                self._connection.request(method, f"/v1/data/{path}", payload, {"Content-Type": "application/json"})
-                response = self._connection.getresponse()
+                connection.request(method, f"/v1/data/{path}", payload, {"Content-Type": "application/json"})
+                response = connection.getresponse()
                 raw = response.read()
                 break
             except (http.client.HTTPException, ConnectionError):
-                self._connection.close()
-                self._connection = None
+                connection.close()
+                self._local.connection = None
                 if attempt == 2:
                     raise
         if response.status >= 400:
@@ -130,9 +141,11 @@ class OpaServer:
         return reply["result"]
 
     def close(self) -> None:
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
+        with self._lock:
+            for connection in self._connections:
+                connection.close()
+            self._connections.clear()
+        self._local = threading.local()
         if self.process is not None:
             self.process.terminate()
             try:

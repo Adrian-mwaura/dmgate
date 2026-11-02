@@ -20,6 +20,7 @@ SAMPLE="${SAMPLE:-}"              # about this many probes (every k-th); empty =
 DRY_RUN="${DRY_RUN:-0}"
 GPUS="${GPUS:-auto}"              # auto = the first free cards; or a list such as 0,1
 TP="${TP:-1}"                     # cards per model (tensor parallelism)
+WORKERS="${WORKERS:-16}"          # questions in flight at once; vLLM batches them on the card
 GPU_WAIT_MINUTES="${GPU_WAIT_MINUTES:-120}"
 READY_MINUTES="${READY_MINUTES:-20}"
 MAX_LEN="${MAX_LEN:-16384}"
@@ -52,6 +53,7 @@ log() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$OUT/run.log"; }
   echo "ladder: $LADDER"
   echo "sample: ${SAMPLE:-all}"
   echo "tensor parallel: $TP"
+  echo "workers: $WORKERS"
   echo "sampler: $([[ "$VLLM_USE_FLASHINFER_SAMPLER" == 0 ]] && echo 'vLLM native (FlashInfer off)' || echo FlashInfer)"
 } >"$OUT/manifest.txt"
 cat "$OUT/manifest.txt"
@@ -147,12 +149,12 @@ for name in $LADDER; do
   [[ "$DRY_RUN" == 1 ]] && export DMGATE_LLM_MODEL="dry-run/$model"  # keeps stub answers out of the real cache
   export DMGATE_LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 
-  if "$PYTHON" -m dmgate.llm.evaluate --task compiler,sensitivity --out "$dest/llm-eval" >"$dest/llm-eval.log" 2>&1; then
+  if "$PYTHON" -m dmgate.llm.evaluate --task compiler,sensitivity --workers "$WORKERS" --out "$dest/llm-eval" >"$dest/llm-eval.log" 2>&1; then
     log "$name: llm-eval done"
   else
     log "$name: llm-eval FAILED (see $dest/llm-eval.log)"
   fi
-  if "$PYTHON" -m dmgate.harness --dataset fsdb-dev-probes --gate rules-llm --n-boot 1000 --out "$dest/rules-llm" \
+  if "$PYTHON" -m dmgate.harness --dataset fsdb-dev-probes --gate rules-llm --n-boot 1000 --workers "$WORKERS" --out "$dest/rules-llm" \
       ${SAMPLE:+--sample "$SAMPLE"} >"$dest/rules-llm.log" 2>&1; then
     log "$name: rules-llm done"
   else

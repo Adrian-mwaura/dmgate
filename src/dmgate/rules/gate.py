@@ -12,6 +12,7 @@ verifies, rebuild and decide again. A citation can only lower the soft layer (de
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -83,15 +84,17 @@ class RuleGate:
         self._server = server
         self._owns_server = server is None
         self._loaded = False
+        self._lock = threading.Lock()  # decisions may run in parallel (harness --workers)
 
     def _opa(self) -> OpaServer:
-        if self._server is None:
-            self._server = OpaServer().start()
-        if not self._loaded:
-            self._server.put_data("dmgate/soft", {"rows": self.table.to_data(), "version": self.table.version})
-            self._server.put_data("dmgate/config", self.config)
-            self._loaded = True
-        return self._server
+        with self._lock:
+            if self._server is None:
+                self._server = OpaServer().start()
+            if not self._loaded:
+                self._server.put_data("dmgate/soft", {"rows": self.table.to_data(), "version": self.table.version})
+                self._server.put_data("dmgate/config", self.config)
+                self._loaded = True
+            return self._server
 
     def decide(self, request: GateInput) -> Decision:
         contract = self.contracts(request)

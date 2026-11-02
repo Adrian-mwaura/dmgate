@@ -58,8 +58,8 @@ The LLM endpoint comes from `DMGATE_LLM_BASE_URL`, `DMGATE_LLM_MODEL` (optional
 `DMGATE_LLM_API_KEY`, `DMGATE_LLM_EXTRA_BODY`, `DMGATE_LLM_STRUCTURED` = `response_format` or
 `structured_outputs`; `DMGATE_LLM_REPLAY=1` answers from the cache only, no endpoint needed). The
 GPUs are the ZJU campus server's (8 × RTX 3090, 24 GB, shared with other students; campus network
-or VPN; `ssh zju3090`), running vLLM 0.31.0. Everything there lives under `/home/part1/<user>`,
-never in `~` or `/tmp` (the system disk is full). The routine: `scripts/server.ps1 -Push`, prepare
+or VPN; `ssh zju3090`), running vLLM 0.31.0. Everything there lives under `/home/part1/<user>`
+(the home folder, on the big disk), never in `/tmp` (the system disk is full). The routine: `scripts/server.ps1 -Push`, prepare
 without a GPU (`scripts/server_setup.sh`), measure inside tmux with `scripts/measure.sh` (it takes
 the first free card and gives it back), `scripts/server.ps1 -Pull`, replay on Windows;
 `docs/DEPLOY.md` has the steps. Record model, vLLM version and GPU with every number (`measure.sh`
