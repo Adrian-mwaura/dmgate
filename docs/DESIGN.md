@@ -373,17 +373,18 @@ Never train on decision-only reward: it makes facts meaningless (reward hacking)
   Replaces the default analyzer, which lets the agent rate its own risk.
 - **OpenHands Layer B:** wrapper around tool executors → Deny-with-reason as an observation, Minimize
   rewrites, stdout tokenization, handle resolution.
-- **Deployment:** vLLM on AutoDL (gate models; optionally the agent model) behind an SSH tunnel.
+- **Deployment:** vLLM on the ZJU campus GPU server (8 × RTX 3090; the gate models and the agent
+  model) behind an SSH tunnel.
   OpenHands, its Docker sandbox, the gate service, OPA, test data and the eval harness on the Windows
   machine (Docker Desktop + WSL2). The gate only talks to an OpenAI-compatible endpoint. Step by
   step in `docs/DEPLOY.md`; `scripts/serve_vllm.sh` serves a model on 127.0.0.1 only. vLLM 0.31.0 is
   pinned. Requests use `response_format` json_schema (or vLLM's `structured_outputs` field); the old
   `guided_json` field was removed in vLLM 0.12 and can be ignored silently, so the client refuses it
   and every run starts with a smoke check that the server enforces the schema.
-- **GPU time is decoupled from analysis:** AutoDL GPUs are scarce by day, so the machine is prepared
-  in no-GPU mode (`scripts/autodl_setup.sh`, ending with a dry run against a stub server), measured
-  unattended at night (`scripts/overnight.sh`, one model per ladder rung, with a manifest), and the
-  results and answer cache come back to Windows (`scripts/autodl.ps1`), where runs replay from the
+- **GPU time is decoupled from analysis:** the server is shared, so it is prepared without a GPU
+  (`scripts/server_setup.sh`, ending with a dry run against a stub server), measured unattended
+  (`scripts/measure.sh`, one model per ladder rung on the first free card, with a manifest), and the
+  results and answer cache come back to Windows (`scripts/server.ps1`), where runs replay from the
   cache alone (`DMGATE_LLM_REPLAY=1`).
 
 ## 8. Evaluation
@@ -486,7 +487,8 @@ Rego on an OPA sidecar, box geometry, rule gate. M4: SQL resolver with dry-run, 
 file globs, the FS/DB dev benchmark v0. M5 (built 2026-10-27, not yet validated): OpenAI-compatible
 client with constrained JSON and an answer cache, contract compiler, fact filler, `dmgate-llm-eval`,
 `rules-llm` gate; checked with scripted models only, so no accuracy numbers until an endpoint
-exists. Overnight kit (setup, overnight run, push and pull, stub server, replay). Q12 implemented
+exists. Server kit (setup, measurement run, push and pull, stub server, replay; on the ZJU server
+since 2026-11-02). Q12 implemented
 (2026-10-30): `target_class` and `remote_named`, record-aware read and write rows, directory
 expansion, the code-explore family. 285 tests.
 
@@ -517,7 +519,7 @@ After Q12 (2026-10-30), on 3,616 FS/DB probes (seven families) and 2,560 AmPermB
 | `rules-oracle-contract` | 0.0% | 0.0% | 0.0% | 0.0% |
 
 The rules now lose nothing a perfect contract knows, on either benchmark; what remains is the
-contract compiler's and the fact filler's accuracy (M5, measured overnight).
+contract compiler's and the fact filler's accuracy (M5, measured on the GPU server).
 
 ### P1 milestones
 
@@ -527,8 +529,8 @@ contract compiler's and the fact filler's accuracy (M5, measured overnight).
 | M2 ✅ | Fact schema (JSON schema, finite domains) and deterministic fact builder; contract is an input | Unit tests per fact; with the oracle's contract, `targets_in_contract` reproduces all 2,560 probe labels (plumbing, not tuning) | — |
 | M3 ✅ | Rule engine: invariants, soft-rule table, composition in Rego; OPA sidecar; schema check | Enumeration test that no soft row can go below an invariant floor; Rego/Python agreement on every cell | OK to download the OPA binary (given) |
 | M4 ✅ | FS/DB dev benchmark v0 on the S×B×R axes, deterministic oracles; SQL resolver (sqlglot) with dry-run | Oracle self-consistency tests; resolvers recover all 3,104 probe targets | — |
-| M5 (built, awaiting endpoint) | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact (`dmgate-llm-eval`); plumbing proven with scripted models | AutoDL endpoint, GPU type (Q6) |
-| M6 | OpenHands runs on AmPermBench tasks (gate log-only) → test records; first end-to-end numbers, E1, E7. Task environments are our own, rebuilt from AmPermBench's data files and README (its shims are code, which `external/` rules forbid running). Agent: Qwen3.5-35B-A3B FP8, self-hosted (Q7) | Run coverage across 128 prompts | A big-memory AutoDL card (RTX 6000D or larger); Docker Desktop + WSL2 on Windows |
+| M5 (built, awaiting endpoint) | LLM layer: OpenAI-compatible client, contract compiler, fact filler (constrained JSON) | Dev-benchmark accuracy per fact (`dmgate-llm-eval`); plumbing proven with scripted models | The ZJU server account (given 2026-11-02) |
+| M6 | OpenHands runs on AmPermBench tasks (gate log-only) → test records; first end-to-end numbers, E1, E7. Task environments are our own, rebuilt from AmPermBench's data files and README (its shims are code, which `external/` rules forbid running). Agent: Qwen3.5-35B-A3B FP8, self-hosted (Q7) | Run coverage across 128 prompts | Four free RTX 3090s on the ZJU server (tensor parallelism); Docker Desktop + WSL2 on Windows |
 
 ## 10. Research contributions
 
@@ -548,8 +550,8 @@ contract compiler's and the fact filler's accuracy (M5, measured overnight).
 | Q3 | Is the quote check enough to make cited authorization (the only outcome-lowering path) safe? | Position 2 |
 | Q4 | Is requiring a co-occurring risk fact for the residual-risk flag too conservative? | Position 2 |
 | Q5 | Does the OpenHands persistent shell allow per-command transactions? | Position 4 (verify in code) |
-| Q6 | AutoDL: ~~GPU card type~~ resolved 2026-10-27: RTX 4090, 24 GB (Inner Mongolia B; Xeon Gold 6430, 120 GB RAM, 30 GB system + 50 GB data disk, driver 595.71, CUDA ≤ 13.2). Still open: whether instances can run Docker (assumed not) | Deployment |
-| Q7 | ~~Agent model for OpenHands: open model on AutoDL or an API model?~~ Decided 2026-11-02: self-hosted open model (see §12; replaced the 2026-10-30 "mixed" decision) | Deployment |
+| Q6 | ~~GPU machine and card type~~ Resolved 2026-11-02: the ZJU campus server, 8 × RTX 3090 (24 GB); AutoDL dropped (see §12). Docker is installed there, but users are not in the `docker` group, so containers (the OpenHands sandboxes) stay on Windows | Deployment |
+| Q7 | ~~Agent model for OpenHands: open model on AutoDL or an API model?~~ Decided 2026-11-02: self-hosted open model (see §12; replaced the 2026-10-30 "mixed" decision); runs on four of the ZJU server's 3090s | Deployment |
 | Q14 | ~~Which API providers and models: a frontier model for the headline M6 runs (comparability favours the family AmPermBench measured, Claude Code), a cheaper model for benign-corpus volume, and the spending cap. The user creates the key and sets it as an environment variable; nothing is spent without a priced plan and a yes~~ Closed 2026-11-02: superseded by self-hosting (Q7); providers and a cap matter again only if the API fallback is used | Q7 |
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
@@ -578,6 +580,7 @@ contract compiler's and the fact filler's accuracy (M5, measured overnight).
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-11-02 | **GPU: the ZJU International campus server only; AutoDL dropped** (the user's call). The server: 8 × RTX 3090 (24 GB, Ampere), driver 590.48 / CUDA 13.1, 96 cores, 251 GB RAM, shared with other students, no job scheduler, reachable on the campus network or VPN. Its system disk is 99% full, so the repository, environment, weights, caches and temporary files all live under `/home/part1/<user>` (4.1 TB free). Consequences: the gate ladder is unchanged (24 GB per card, as on the 4090); FP8 rungs run weight-only on Ampere (vLLM's Marlin kernels: the same memory, a little slower); the agent (Q7) moves from one big-memory card to tensor parallelism over four 3090s (two would leave about 5 GB for the attention cache), with FP8 mixture-of-experts kernels on Ampere to verify at M6 (fallback: bf16 weights, about 70 GB, on the same four cards). Scripts generalized and renamed: `server_setup.sh` (was `autodl_setup.sh`), `measure.sh` (was `overnight.sh`; claims the first free card and waits when none is, a per-user port, a per-run API key so other users cannot reach our model server), `server.ps1` (was `autodl.ps1`), and `server_env.sh`, which they share |
 | 2026-11-02 | Q7 re-decided after costing: **the agent model is self-hosted open weights** (replaces the 2026-10-30 mixed plan). Agent: Qwen3.5-35B-A3B (Apache-2.0; 36B parameters, 3B active; SWE-bench Verified 69.2% on its card) in FP8 (37.5 GB) on a big-memory AutoDL card, first choice the RTX 6000D (84 GB, Blackwell, native FP8), which also holds the gate model (Qwen3.5-4B, 9.3 GB) at the same time; RTX PRO 6000 / H20 (96 GB), H800 (80 GB), vGPU-48GB / RTX PRO 5000 (48 GB) also work. The 4090 cannot hold a capable agent (Qwen3.5-27B is 30.2 GB even at 4 bits), so it stays the gate's card; Qwen3.5-9B on it can serve later as a weaker-agent robustness slice. Considered and set aside: a frontier API model (realistic but costly at corpus scale), a cheap hosted API for the same open model (Qwen3.5-Flash; kept as a fallback only if big cards stay unavailable for days, with the user's OK and a spending cap). Cost is GPU hours only; no data leaves the platform; weights are fixed, so runs are reproducible. Trajectories are recorded once and replayed for every gate evaluation |
 | 2026-10-30 | Q7 decided: **mixed agent models** (superseded 2026-11-02 by self-hosting, above). A frontier API model drives the headline M6 runs (realistic overreach is what FNR measures; a weak agent that never attempts the overscoped action flatters the gate); a cheaper API model generates benign-corpus volume, with a frontier sample mixed in; one open model on AutoDL drives a later robustness slice. The GPU stays dedicated to the gate. Trajectories are recorded with model id and date, so evaluation replays deterministically whatever the API does later. M6 builds its own task containers rather than running AmPermBench's. Providers and budget are Q14 |
 | 2026-10-30 | Q12 implemented as decided: fact `target_class` and sink `remote_named` (schema regenerated), recipients named by the contract, soft table `q12-1`, directory reads take the strictest class and highest sensitivity of the files below, listings (`git branch`, `squeue`, `kubectl get`, `aws s3 ls`) marked as listings, and the code-explore dev family. Bounds: stand-in contract 0% / 0% on FS/DB and AmPermBench |

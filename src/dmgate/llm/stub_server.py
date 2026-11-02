@@ -1,7 +1,7 @@
 """A stand-in for vLLM: an OpenAI-compatible server that answers every request with the smallest
 JSON its schema allows (first enum value, empty strings and lists, minimum numbers).
 
-It knows nothing, so its answers measure nothing. It exists to dry-run the pipeline: the overnight
+It knows nothing, so its answers measure nothing. It exists to dry-run the pipeline: the measurement
 script, the evaluation, the gate, the cache, without a GPU. Because it honours the schema, it passes
 the smoke check, which is what a real constrained server must do too.
 
