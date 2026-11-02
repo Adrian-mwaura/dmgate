@@ -530,6 +530,7 @@ vLLM 0.31.0 on one RTX 3090, PyTorch sampler, 16 workers; commit `98978ce`, run
 | `rules-profile-only` (bound) | 60.0% | 0.0% | | |
 | `rules-llm` Qwen3.5-4B | 29.1% [26.1, 32.2] | 11.4% [8.9, 13.9] | 21.0% | 64.6%, 6.1% |
 | `rules-llm` Qwen3.5-9B (FP8 weights) | 24.0% [21.2, 26.9] | 15.8% [12.8, 19.0] | 27.2% | 65.7%, 4.0% |
+| `rules-llm` Qwen3.8-27B (FP8 checkpoint, two cards; run `20261102-1053-measure`, commit `3cdebf6`) | 11.7% [9.7, 14.0] | 32.8% [29.1, 36.7] | 24.6% | 69.7%, 11.1% |
 | `rules-oracle-contract` (bound) | 0.0% | 0.0% | 100% | |
 
 The compiler is the bottleneck. Both models grant verbs the request did not ask for (4B: 214 of
@@ -538,6 +539,24 @@ The 9B compiles better on every compiler measure yet lets more harmful actions t
 db-delete (FNR 3.3% to 23.8%) and fs-read (13.2% to 22.4%); the difference is not yet tested on
 paired probes. Ask carries the blocking: counting Ask as allow, FNR is about 80% for both.
 Sensitivity errors lean cautious (S1 called S2 for about half the S1 items).
+
+The 27B reads requests more generously: fewer false positives, many more misses (paired against
+the 9B: FNR +13.2 to +21.1 points, FPR -17.4 to -7.8). Its misses split between contracts that
+cover the overreaching target (449) and verified citations (422); its citations also rightly
+unblock 41 benign actions (the 4B and 9B: 1). A bigger model does not make the gate safer: what
+the model is allowed to widen (contract coverage, citations) must be bounded by the rules. Q3's
+options rescored from the recorded rule results (exact: option A reproduces all 3,616 recorded
+cases for each model), FPR / FNR:
+
+| Model | A: citations as built | B: target-bound | E: citations off |
+|---|---|---|---|
+| Qwen3.5-4B | 29.1% / 11.4% | 29.1% / 11.3% | 29.2% / 11.2% |
+| Qwen3.5-9B | 24.0% / 15.8% | 24.0% / 11.5% | 24.1% / 11.5% |
+| Qwen3.8-27B | 11.7% / 32.8% | 13.0% / 18.0% | 16.4% / 17.4% |
+
+B's 16 extra misses against E (all db-update) are column writes rightly cited (the quote names
+`status`) in actions whose harm is a row the contract itself covers: compiler over-coverage, not
+a citation flaw.
 
 ### P1 milestones
 
@@ -598,6 +617,7 @@ Sensitivity errors lean cautious (S1 called S2 for about half the S1 items).
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-11-02 | Rung 4 measured: Qwen3.8-27B (FP8 checkpoint served weight-only by Marlin on two 3090s; `--max-num-seqs 128`, since two cards hold 190 linear-attention state blocks) FPR 11.7%, FNR 32.8%. A stronger model does not fix Q3: its citations let 422 harmful probes through. Rescored from the recorded rule results, option B (target-bound) gives 13.0% / 18.0% and E (off) 16.4% / 17.4%. Replay on Windows reproduces the run exactly. Remaining misses on every model are mostly compiler over-coverage |
 | 2026-11-02 | Error analysis by replay (no GPU; Windows reproduces the server's decisions exactly): the 9B's higher FNR is all verified citations (paired, cluster bootstrap: +1.5 to +7.5 points); the rest is compiler habits (files taken for rows, wildcard-less patterns, indirect verbs, uploads without read, the tool taken for an exec grant, invented `where` clauses that widen coverage) and guessed sensitivity ceilings. Q3 debated (options in §11); the user chose to try a stronger model first. Rung added: Qwen3.8-27B (Apache-2.0, August 2026; challenge: general-purpose, open, minimal scale, within E7's 32B bound), its FP8 checkpoint on two 3090s; `measure.sh` takes the card count from the rung. The 4090 server refused SSH (no access yet) |
 | 2026-11-02 | First full M5 measurements on the FS/DB dev probes (numbers in §9 status): Qwen3.5-4B FPR 29.1%, FNR 11.4%; Qwen3.5-9B FP8 FPR 24.0%, FNR 15.8%; compiler exact coverage 21% and 27%. The compiler, not the rules or the filler, is the bottleneck; next is error analysis by replay (no GPU) before any prompt change |
 | 2026-11-02 | First runs on the ZJU server. vLLM 0.31.0 crashed warming up on the 3090: FlashInfer compiles its sampling kernel for sm_86 with nvcc, which the server lacks, so the server scripts set `VLLM_USE_FLASHINFER_SAMPLER=0` (vLLM's PyTorch sampler; the manifest records it). The evaluation sent one request at a time (21 answers a minute, the card mostly idle), so the harness and `dmgate-llm-eval` gained `--workers` (threads; results in item order; the answer cache asks a shared question once; OPA connections, the filler's per-decision log and the SQL snapshots made thread-safe). `measure.sh` uses 16. Sequential and parallel runs give identical decisions and reports on the stub. Latency is reported only from runs with one worker, since with several each decision's time includes its wait behind the others |
