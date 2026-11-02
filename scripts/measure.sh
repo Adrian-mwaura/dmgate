@@ -9,6 +9,7 @@
 #   LADDER="qwen35-4b" bash scripts/measure.sh       # one rung
 #   LADDER="qwen38-27b-fp8" bash scripts/measure.sh  # the 27B, on the two cards its rung asks for
 #   GPUS=3 bash scripts/measure.sh                   # this card, instead of the first free one
+#   DATASET=fsdb-dev-negation bash scripts/measure.sh  # another probe set (the LLM evaluation is skipped)
 #   DRY_RUN=1 SAMPLE=150 bash scripts/measure.sh     # no GPU: a stub server stands in for vLLM
 set -uo pipefail
 
@@ -17,6 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/server_env.sh"
 PYTHON="${PYTHON:-$ENV/bin/python}"
 VLLM="${VLLM:-$(dirname "$PYTHON")/vllm}"
 LADDER="${LADDER:-qwen35-4b qwen35-9b-fp8}"
+DATASET="${DATASET:-fsdb-dev-probes}"   # the gate's probes; dmgate-llm-eval measures the base prompts only
 SAMPLE="${SAMPLE:-}"              # about this many probes (every k-th); empty = all. Never for reported numbers.
 DRY_RUN="${DRY_RUN:-0}"
 GPUS="${GPUS:-auto}"              # auto = the first free cards; or a list such as 0,1
@@ -57,6 +59,7 @@ log() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$OUT/run.log"; }
                 sort | uniq -c | sed 's/^ *//' | paste -sd';' - || echo none)"
   echo "vllm: $([[ "$DRY_RUN" == 1 ]] && echo 'stub (dry run)' || "$VLLM" --version 2>/dev/null || echo unknown)"
   echo "ladder: $LADDER"
+  echo "dataset: $DATASET"
   echo "sample: ${SAMPLE:-all}"
   echo "tensor parallel: ${TP:-per rung}"
   echo "workers: $WORKERS"
@@ -157,12 +160,14 @@ for name in $LADDER; do
   [[ "$DRY_RUN" == 1 ]] && export DMGATE_LLM_MODEL="dry-run/$model"  # keeps stub answers out of the real cache
   export DMGATE_LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 
-  if "$PYTHON" -m dmgate.llm.evaluate --task compiler,sensitivity --workers "$WORKERS" --out "$dest/llm-eval" >"$dest/llm-eval.log" 2>&1; then
+  if [[ "$DATASET" != fsdb-dev-probes ]]; then
+    log "$name: llm-eval skipped (it measures the base prompts)"
+  elif "$PYTHON" -m dmgate.llm.evaluate --task compiler,sensitivity --workers "$WORKERS" --out "$dest/llm-eval" >"$dest/llm-eval.log" 2>&1; then
     log "$name: llm-eval done"
   else
     log "$name: llm-eval FAILED (see $dest/llm-eval.log)"
   fi
-  if "$PYTHON" -m dmgate.harness --dataset fsdb-dev-probes --gate rules-llm --n-boot 1000 --workers "$WORKERS" --out "$dest/rules-llm" \
+  if "$PYTHON" -m dmgate.harness --dataset "$DATASET" --gate rules-llm --n-boot 1000 --workers "$WORKERS" --out "$dest/rules-llm" \
       ${SAMPLE:+--sample "$SAMPLE"} >"$dest/rules-llm.log" 2>&1; then
     log "$name: rules-llm done"
   else

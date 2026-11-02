@@ -15,6 +15,8 @@ from dmgate.rules.gate import resolve_action
 
 PROMPTS = fsdb.prompts()
 RECORDS = fsdb.probe_records()
+NEGATION = fsdb.negation_prompts()
+NEGATION_RECORDS = fsdb.negation_records()
 
 
 CANDIDATE_FAMILIES = [p for p in PROMPTS if not p.prompt_id.startswith("FX")]  # the T/P/F candidate structure
@@ -133,14 +135,42 @@ def test_the_coding_task_authorizes_the_workspace_and_names_only_the_tests():
         assert len(p.named) == (1 if p.b in ("B0", "B1") else 2)
 
 
+def test_the_negation_variant_adds_one_sentence_naming_one_decoy():
+    base = {p.prompt_id: p for p in PROMPTS}
+    assert len(NEGATION) == 192 and all(p.prompt_id.endswith("-N") for p in NEGATION)
+    for n in NEGATION:
+        b = base[n.prompt_id.removesuffix("-N")]
+        (decoy,) = n.negated
+        assert decoy in b.must_preserve and decoy not in b.authorized and decoy not in b.protected
+        handle = next(i.handle for i in b.items.values() if i.target == decoy)
+        sentence = fsdb.NEGATIONS[fsdb.AXES["S"].index(n.s)].format(x=f"`{handle}`")
+        assert sentence in n.text and n.text.replace(sentence + " ", "") == b.text and f"`{handle}`" not in b.text
+        assert (n.authorized, n.must_preserve, n.universe, n.named) == (b.authorized, b.must_preserve, b.universe, b.named)
+
+
+def test_negation_probes_keep_the_base_actions_and_labels():
+    base = {r.record_id: r for r in RECORDS}
+    negated = {p.prompt_id: p.negated for p in NEGATION}
+    touching = Counter()
+    for r in NEGATION_RECORDS:
+        b = base[r.record_id.replace("-N:", ":")]
+        assert (r.action, r.label) == (b.action, b.label) and r.dataset == fsdb.NEGATION_DATASET
+        touches = bool(r.label.targets & negated[r.cluster_id])
+        assert r.axes["touches_negated"] == ("yes" if touches else "no")
+        assert not touches or r.label.should_block  # the named decoy is never authorized
+        touching[r.cluster_id] += touches
+    assert set(touching) == set(negated) and min(touching.values()) >= 2  # its single probe and its batch
+
+
 @pytest.mark.parametrize("code", [c for c in fsdb.FAMILIES if c != "FX"])
 def test_with_the_oracle_contract_coverage_matches_every_label(code):
     """Plumbing: given a perfect contract, every effect's labeled targets are inside it exactly when
     the probe is benign. Not tuning, and not a result (the contract comes from ground truth). The
     coding family is excluded on purpose: its benign probes pass because the workspace is free
-    (policy), not because the contract covers them; its check is the gate bound (test_rule_gate)."""
-    contracts = {p.prompt_id: fsdb.oracle_contract(p) for p in PROMPTS if p.prompt_id.startswith(code)}
-    for r in RECORDS:
+    (policy), not because the contract covers them; its check is the gate bound (test_rule_gate).
+    The negation variant must agree too: naming a decoy to exclude it puts nothing in the contract."""
+    contracts = {p.prompt_id: fsdb.oracle_contract(p) for p in PROMPTS + NEGATION if p.prompt_id.startswith(code)}
+    for r in RECORDS + NEGATION_RECORDS:
         if r.cluster_id not in contracts:
             continue
         request = r.gate_input()

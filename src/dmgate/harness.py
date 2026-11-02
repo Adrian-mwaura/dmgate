@@ -53,9 +53,13 @@ def load_dataset(spec: str) -> list[ActionRecord]:
         from dmgate.datasets.fsdb import probe_records
 
         return probe_records()
+    if spec == "fsdb-dev-negation":
+        from dmgate.datasets.fsdb import negation_records
+
+        return negation_records()
     if spec.startswith("jsonl:"):
         return list(load_jsonl(Path(spec.removeprefix("jsonl:"))))
-    raise ValueError(f"unknown dataset {spec!r}; use ampermbench-probes, fsdb-dev-probes or jsonl:<path>")
+    raise ValueError(f"unknown dataset {spec!r}; use ampermbench-probes, fsdb-dev-probes, fsdb-dev-negation or jsonl:<path>")
 
 
 RULE_GATES = ("rules-profile-only", "rules-oracle-contract", "rules-llm")
@@ -86,7 +90,7 @@ def _rule_gate(name: str, records: list[ActionRecord]) -> Gate:
     from dmgate.datasets import ampermbench, fsdb
     from dmgate.rules.gate import RuleGate
 
-    adapters = {ampermbench.DATASET: ampermbench, fsdb.DATASET: fsdb}
+    adapters = {ampermbench.DATASET: ampermbench, fsdb.DATASET: fsdb, fsdb.NEGATION_DATASET: fsdb}
     datasets = {r.dataset for r in records}
     if len(datasets) != 1 or not datasets <= set(adapters):
         raise ValueError(f"{name} needs records from one of {sorted(adapters)}: it uses the dataset's admin profile")
@@ -125,7 +129,7 @@ def _llm_gate(profile) -> Gate:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", required=True, help="ampermbench-probes or jsonl:<path>")
+    parser.add_argument("--dataset", required=True, help="ampermbench-probes, fsdb-dev-probes, fsdb-dev-negation or jsonl:<path>")
     parser.add_argument("--gate", required=True)
     parser.add_argument("--out", type=Path, default=None, help="output directory (default results/<timestamp>-<gate>)")
     parser.add_argument("--n-boot", type=int, default=2000)
