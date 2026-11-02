@@ -32,7 +32,8 @@ if (-not $Data) {
     $user = (ssh -G $Server | Where-Object { $_ -like "user *" } | Select-Object -First 1) -replace "^user ", ""
     $Data = "/home/part1/$user"
 }
-$hint = "cannot reach ${Server}: are you on the campus network or the campus VPN?"
+$hint = "cannot reach ${Server}. Type the passphrase within two minutes of the prompt (the server " +
+        "closes the connection after that), and be on the campus network or the campus VPN."
 
 if ($Push) {
     $bundle = Join-Path $env:TEMP "dmgate.bundle"
