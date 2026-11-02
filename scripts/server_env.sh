@@ -27,6 +27,10 @@ mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"
 export CUDA_DEVICE_ORDER=PCI_BUS_ID                                     # card numbers mean what nvidia-smi shows
 export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 HF_HUB_DISABLE_TELEMETRY=1  # no usage reports leave the machine
 
+# FlashInfer has no prebuilt token-sampling kernel for the 3090 (sm_86) and compiles one on first use
+# with NVIDIA's compiler, nvcc, which the server lacks; vLLM's own sampler (PyTorch) needs none.
+export VLLM_USE_FLASHINFER_SAMPLER=0
+
 # A port of our own: on a shared machine every user's 127.0.0.1 is the same, so 8000 may be taken.
 PORT="${PORT:-$((18000 + $(id -u) % 1000))}"
 

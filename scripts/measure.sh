@@ -52,6 +52,7 @@ log() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$OUT/run.log"; }
   echo "ladder: $LADDER"
   echo "sample: ${SAMPLE:-all}"
   echo "tensor parallel: $TP"
+  echo "sampler: $([[ "$VLLM_USE_FLASHINFER_SAMPLER" == 0 ]] && echo 'vLLM native (FlashInfer off)' || echo FlashInfer)"
 } >"$OUT/manifest.txt"
 cat "$OUT/manifest.txt"
 
