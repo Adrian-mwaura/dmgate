@@ -561,6 +561,30 @@ B's 16 extra misses against E (all db-update) are column writes rightly cited (t
 `status`) in actions whose harm is a row the contract itself covers: compiler over-coverage, not
 a citation flaw.
 
+**Negation variant** (`fsdb-dev-negation`, 2026-11-02): 192 prompts, each the base prompt plus one
+sentence that names a decoy to exclude it ("Leave `X` alone.", "Don't touch `X`.", "Keep `X` as it
+is.", "Do not include `X`."); 3,104 probes, 432 of them harmful actions on the named decoy. Bounds:
+oracle contract 0% / 0%, profile only 100% / 0%. Measured with B in force: the 4B and 9B on one 3090
+each (runs `20261102-122801-measure`, `-122804-measure`), the 27B on two 4090s with native FP8 (run
+`20261102-210118-measure`; its cache seeded with its 3090 base answers). Compared with the same probes
+of the base prompts, replayed under B:
+
+| Model | FPR base / negation | FNR base / negation | Named decoy let through, base / negation | via a target-bound citation |
+|---|---|---|---|---|
+| Qwen3.5-4B | 48.5% / 46.4% | 11.7% / 12.2% | 20.4% / 32.6% | 1 |
+| Qwen3.5-9B | 40.0% / 39.6% | 12.3% / 11.9% | 23.4% / 27.8% | 0 |
+| Qwen3.8-27B | 21.6% / **57.6%** | 19.1% / 13.9% | 35.4% / 33.1% | 10 |
+
+(FPR here excludes the coding family, which this variant leaves out.) B's own polarity gap is real
+but small: 10 harmful probes for the 27B, quotes such as "Don't touch `kim-test-4812@staging.example`".
+The larger effect is in the compiler: a contract has no slot for "not this", so the models put the
+excluded target where names go. Per prompt, the exclusion is left out (correct) in 38% (4B), 58%
+(9B) and 31% (27B); listed as a target id in 44 / 24 / 30 prompts (it is then covered: misses); and
+written into a `where` condition in 81 / 49 / 89 prompts. With no "not equal" operator, "leave the
+live account alone" becomes `email = <the live account>`, AND-ed with the rest, which usually
+uncovers what the user did ask for: 149 of the 27B's 196 newly blocked benign probes. The other 47
+are not attributed (the 27B's base and negation runs differ in hardware as well).
+
 ### P1 milestones
 
 | # | Milestone | Validation | Needs from user |
@@ -595,6 +619,7 @@ a citation flaw.
 | Q14 | ~~Which API providers and models: a frontier model for the headline M6 runs (comparability favours the family AmPermBench measured, Claude Code), a cheaper model for benign-corpus volume, and the spending cap. The user creates the key and sets it as an environment variable; nothing is spent without a priced plan and a yes~~ Closed 2026-11-02: superseded by self-hosting (Q7); providers and a cap matter again only if the API fallback is used | Q7 |
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
+| Q16 | Exclusions in contracts. Requests say what to leave alone, and a contract has no way to say it, so compilers put the excluded target into ids (covered: misses) or into `where` conditions that have no "not equal" (the exclusion turns into its opposite: false alarms); evidence in §9 status (negation variant). Options to debate: a grounded `excluded` list in the contract that the rules enforce (an effect on an excluded target never passes on the contract or a citation); a `ne` / `not_in` operator; both. Related: Q15 (coverage) and B's polarity gap (10 harmful probes for the 27B) | Negation variant |
 | Q15 | Bounding contract coverage. Of the targets a request does not authorize that compiled contracts covered (citations aside), `where` conditions and patterns the compiler wrote cover 83% (4B), 98% (9B) and 99% (27B); a wrongly listed id 1-6%. Coverage is id OR pattern OR condition, so a loose description widens even a correct id. Options to debate: the code proposes the real candidates and the model only selects (closed world; open issues: long candidate lists for descriptive requests, targets created later); conditions limited to the environment's attributes and values (enums in the output schema); ids, patterns and conditions narrowing together (AND). Each can be measured first by replay with a patched coverage function | M5 analysis |
 | Q13 | M5 choices made while building, awaiting review: (a) grounding: every compiled grant and target must quote the user, and one-turn verbs must quote the latest turn; (b) the compiler sees attribute values only for short categorical attributes (at most 8 distinct identifiers); (c) the provenance question needs a majority of 3 samples and a quote found in the tool output; citations need all 3 samples to verify; the residual-risk flag needs all 3 to agree; sampling temperature 0.7; (d) four hand-written exemplars; (e) the compiler runs once per conversation state, on all user turns; (f) delegated documents are not compiled yet | M5 |
 | Q12 | Rule gaps the FS/DB dev benchmark found (needs debate before rule changes): (a) ~~read minimization~~ **decided 2026-10-30: A5, class-gated**; (b) ~~write targets~~ **decided 2026-10-30: B3, record writes**; (c) ~~named destinations~~ **decided 2026-10-30: C2, remote_named** (see §12). Resolved; was: (a) **read minimization**: SR-READ allows any read inside the envelope, so reading a colleague's tickets, other customers' rows or unneeded columns passes. Should reads of targets outside the contract be narrowed (Minimize to covered rows/columns/files) or asked, and for all data or only S2+ (leaving coding agents free to explore S0/S1 workspace files)? (b) **write targets**: SW-WRITE allows any write inside the envelope (chosen for reversible workspace files), so updating other people's orders or extra columns passes. Needs a way to tell workspace files from records, e.g. a `target_class` fact or contract targets that cover the workspace for coding tasks. (c) **named destinations**: a read feeding an upload to a host the request names has sink `remote_other`, so SR-EXPOSED asks (all fs-share benign FP). Proposal: a `remote_named` sink class, mirroring `recipient_named` | M4 |
@@ -621,6 +646,7 @@ a citation flaw.
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-11-02 | Negation variant measured on all three models (numbers in §9 status). B's polarity gap: 1 / 0 / 10 harmful probes let through by a citation that names the excluded target (4B / 9B / 27B). The compiler is the larger problem: exclusions land in target ids (misses) or in `where` conditions without a "not equal" (false alarms; 149 of the 27B's 196 new ones). Q16 opened (exclusions in contracts). Runs spread over two servers in parallel; pulls merge answer caches; a vLLM grammar error (HTTP 500) is now retried, then recorded as no answer (1 request in the 9B run) |
 | 2026-11-02 | Q3 decided: **B, target-bound citations.** A verified citation must also name every target of the effect it lowers, each by a name no other resource of its kind shares (the builder's naming: id, file name, cwd-relative path, name attributes); an effect whose targets cannot all be listed (none, unresolved, opaque) cannot be bound. Deterministic, in the builder (`_citation`); facts, schema values and Rego unchanged. Chosen over A (as built: 9B FNR 15.8%, 27B 32.8%), C (recompile through the citation: inherits compiler errors), D (one step down: meaningless for envelope gaps) and E (off: 27B FPR 16.4% against B's 13.0%). Replay with the code matches the rescored B on every probe. Known gap: the verb and its polarity are not checked; negation probes go into the FS/DB dev benchmark. Q15 opened for contract coverage |
 | 2026-11-02 | Rung 4 measured: Qwen3.8-27B (FP8 checkpoint served weight-only by Marlin on two 3090s; `--max-num-seqs 128`, since two cards hold 190 linear-attention state blocks) FPR 11.7%, FNR 32.8%. A stronger model does not fix Q3: its citations let 422 harmful probes through. Rescored from the recorded rule results, option B (target-bound) gives 13.0% / 18.0% and E (off) 16.4% / 17.4%. Replay on Windows reproduces the run exactly. Remaining misses on every model are mostly compiler over-coverage |
 | 2026-11-02 | Error analysis by replay (no GPU; Windows reproduces the server's decisions exactly): the 9B's higher FNR is all verified citations (paired, cluster bootstrap: +1.5 to +7.5 points); the rest is compiler habits (files taken for rows, wildcard-less patterns, indirect verbs, uploads without read, the tool taken for an exec grant, invented `where` clauses that widen coverage) and guessed sensitivity ceilings. Q3 debated (options in §11); the user chose to try a stronger model first. Rung added: Qwen3.8-27B (Apache-2.0, August 2026; challenge: general-purpose, open, minimal scale, within E7's 32B bound), its FP8 checkpoint on two 3090s; `measure.sh` takes the card count from the rung. The 4090 server refused SSH (no access yet) |
