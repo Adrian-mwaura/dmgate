@@ -19,7 +19,9 @@ machine, where every run replays without a GPU.
   is no job scheduler: you start programs yourself, on cards nobody else is using. Its address is
   a private campus one (10.x.x.x), reachable only from the campus network or through the campus VPN.
 - **tmux** keeps programs running after you disconnect: `tmux new -s measure` opens a session,
-  `Ctrl-b` then `d` detaches from it, `tmux attach -t measure` comes back.
+  `Ctrl-b` then `d` detaches from it, `tmux attach -t measure` comes back. If `Ctrl-b` only prints
+  `^B`, the server's tmux uses another command key: `tmux show-options -g prefix` names it, and
+  typing `tmux detach` at a prompt inside tmux always works.
 - **SSH tunnel.** `ssh -L 8000:127.0.0.1:18xxx zju3090` makes port 8000 on the Windows machine
   forward to port 18xxx on the server, through the encrypted SSH connection. vLLM listens only on
   the server's own loopback address, so nothing is exposed to the network.
@@ -133,7 +135,9 @@ campus network (or the campus VPN) before any of these steps.
    bash /home/part1/$USER/dmgate/scripts/server_setup.sh
    ```
 
-   It installs vLLM 0.31.0 and the project into `env/`, fetches OPA for Linux (checksum-verified),
+   It installs vLLM 0.31.0 and the project into `env/`, fetches OPA for Linux (checked against a
+   SHA-256 pinned in the script; a download from GitHub that breaks partway resumes, and if it
+   keeps breaking, `.\scripts\server.ps1 -Push -Opa` sends the binary from Windows instead),
    downloads Qwen3.5-4B and Qwen3.5-9B into `models/`, runs the test suite and finishes with a
    **dry run** of the measurement script against a stub server, so a broken script cannot waste
    GPU time. Rerunning it skips whatever is done; after a new `-Push` it pulls the new bundle first.

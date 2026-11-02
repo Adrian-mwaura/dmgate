@@ -45,19 +45,31 @@ PY="$(pick_python)" || { echo "no Python >= 3.11 on this machine: ask the admini
 say "3/7 environment $ENV: vLLM $VLLM_VERSION and the project"
 [[ -x "$ENV/bin/python" ]] || "$PY" -m venv "$ENV"
 "$ENV/bin/python" -m pip install -q --upgrade pip
-"$ENV/bin/python" -m pip install -q "vllm==$VLLM_VERSION" modelscope "huggingface_hub[cli]"
+"$ENV/bin/python" -m pip install -q "vllm==$VLLM_VERSION" modelscope huggingface_hub  # hub 1.x includes the hf command
 "$ENV/bin/python" -m pip install -q -e "$ROOT[dev]"
 "$ENV/bin/vllm" --version
 
 say "4/7 OPA $OPA_VERSION for Linux, checked against its published SHA-256"
 OPA="$ROOT/tools/opa/opa"
-if [[ ! -x "$OPA" ]]; then
+OPA_SHA256="830ab11f61ffec760b5e19db0d7ad02bf037e13f5ef4d665faeaf17632177527"  # GitHub's .sha256 for opa_linux_amd64_static
+sha() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+if [[ "$(sha "$OPA")" != "$OPA_SHA256" ]]; then
   mkdir -p "$ROOT/tools/opa"
-  base="https://github.com/open-policy-agent/opa/releases/download/v$OPA_VERSION/opa_linux_amd64_static"
-  curl -fsSL -o "$OPA.download" "$base"
-  want="$(curl -fsSL "$base.sha256" | awk '{print $1}')"
-  got="$(sha256sum "$OPA.download" | awk '{print $1}')"
-  [[ -n "$want" && "$want" == "$got" ]] || { echo "OPA checksum mismatch: want $want got $got"; rm -f "$OPA.download"; exit 1; }
+  if [[ -f "$DATA/opa_linux_amd64_static" ]]; then  # sent from Windows by scripts/server.ps1 -Push -Opa
+    cp "$DATA/opa_linux_amd64_static" "$OPA.download"
+  else
+    # Downloads from GitHub can break partway from here: each try resumes where the last one stopped.
+    url="https://github.com/open-policy-agent/opa/releases/download/v$OPA_VERSION/opa_linux_amd64_static"
+    for try in 1 2 3 4 5 6 7 8; do
+      [[ "$(sha "$OPA.download")" == "$OPA_SHA256" ]] && break
+      curl -fsSL -C - -o "$OPA.download" "$url" || { echo "download broke (try $try), resuming"; sleep 5; }
+    done
+  fi
+  [[ "$(sha "$OPA.download")" == "$OPA_SHA256" ]] || {
+    echo "OPA download failed or does not match its checksum. Delete $OPA.download, then rerun, or send"
+    echo "the binary from Windows:  .\\scripts\\server.ps1 -Push -Opa"
+    exit 1
+  }
   mv "$OPA.download" "$OPA" && chmod +x "$OPA"
 fi
 "$OPA" version | head -1

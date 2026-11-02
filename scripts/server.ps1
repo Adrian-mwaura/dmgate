@@ -7,6 +7,9 @@
           it to <Data>/dmgate.bundle on the server. The private GitHub repository is not needed there.
   -Pull   Copies the newest results tarball from the server into results\ and unpacks it there,
           including the answer cache, so the runs replay on this machine without a GPU.
+  -Opa    With -Push: also sends OPA's Linux binary (tools\opa\opa_linux_amd64_static, downloaded
+          from GitHub first if missing), for when the server's own download from GitHub breaks. The
+          setup script checks it against the SHA-256 pinned there before using it.
 
   -Server is what you would type after ssh: the "zju3090" entry in ~/.ssh/config (the default; see
   docs/DEPLOY.md), or user@address. -Data defaults to /home/part1/<your user on the server>.
@@ -15,13 +18,16 @@
 .EXAMPLE
   .\scripts\server.ps1 -Push
 .EXAMPLE
+  .\scripts\server.ps1 -Push -Opa
+.EXAMPLE
   .\scripts\server.ps1 -Pull
 #>
 param(
     [string]$Server = "zju3090",
     [string]$Data = "",
     [switch]$Push,
-    [switch]$Pull
+    [switch]$Pull,
+    [switch]$Opa
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -39,9 +45,19 @@ if ($Push) {
     $bundle = Join-Path $env:TEMP "dmgate.bundle"
     git -C $root bundle create $bundle HEAD main
     if ($LASTEXITCODE -ne 0) { throw "git bundle failed" }
-    scp $bundle "${Server}:$Data/dmgate.bundle"
+    $files = @($bundle)
+    if ($Opa) {
+        $opaLinux = Join-Path $root "tools\opa\opa_linux_amd64_static"
+        if (-not (Test-Path $opaLinux)) {
+            New-Item -ItemType Directory -Force (Split-Path $opaLinux) | Out-Null
+            curl.exe -fsSL -o $opaLinux "https://github.com/open-policy-agent/opa/releases/download/v1.21.2/opa_linux_amd64_static"
+            if ($LASTEXITCODE -ne 0) { Remove-Item -Force -ErrorAction SilentlyContinue $opaLinux; throw "OPA download failed" }
+        }
+        $files += $opaLinux
+    }
+    scp @files "${Server}:$Data/"  # one connection, so one passphrase
     if ($LASTEXITCODE -ne 0) { throw $hint }
-    Write-Host "copied to $Data/dmgate.bundle. First time on the server:"
+    Write-Host "copied to ${Data}: $(($files | ForEach-Object { Split-Path -Leaf $_ }) -join ', '). First time on the server:"
     Write-Host "  git clone $Data/dmgate.bundle $Data/dmgate"
     Write-Host "  bash $Data/dmgate/scripts/server_setup.sh"
     Write-Host "Later pushes: the setup script pulls the new bundle in step 1."
