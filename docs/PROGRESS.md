@@ -173,23 +173,56 @@ Section 7.4.
 **Open (to debate next).** Q15, bounding what a contract can cover; Q16, letting a contract say
 "not this" (Section 8).
 
-## 6. Novel mechanisms
+## 6. Mechanisms and prior work
 
-| Mechanism | What it is | Status |
-|---|---|---|
-| Intent contracts | The request compiled into an envelope (permissions, with lifetimes: delete and upload grants last one user turn) and targets; tool output never widens permissions | Built, measured |
-| Quote grounding | Every item the model puts in a contract must quote the user; code checks the quote is in a user turn, and one-turn permissions must quote the latest turn | Built, measured |
-| Target-bound cited authorization | A quote may unblock an action only if it names every target of that action, by a name no other resource shares | Built, measured (Q3) |
-| Facts with finite domains | The model fills typed facts, never verdicts; "unknown" is a value | Built |
-| Three-layer rules with an admin floor | Invariants no soft rule or citation can lower; checked by exhaustive enumeration (about 12,600 fact combinations) | Built, verified |
-| Exact comparison of rule tables | Soft rows are boxes in the fact space; the rows split it into finitely many cells (4,320 for the first table) on which every table is constant, so a change can be classified as loosening or tightening exactly | Built |
-| Class-gated minimization | Reads and writes of records outside the contract are narrowed or asked; workspace files stay free | Built, measured (oracle contract) |
-| SQL dry run | A statement's `WHERE` clause is run as a key query on a read-only snapshot, so the gate knows the exact rows | Built, verified |
-| Replayable evaluation | Every model answer is cached by the exact request; runs replay bit for bit without a GPU; caches from several servers merge by request | Built |
-| FS/DB benchmark with a negation variant | Development data on AmPermBench's three axes, deterministic labels | Built |
-| Transactional sandbox | Opaque programs run in an overlay and are judged on what they actually did | Planned (P2) |
-| Value handles | The model sees `⟦h:7f3a aws_secret len=40⟧` instead of a secret, at a chosen disclosure level | Planned (P3) |
-| Abductive lifecycle loop | Each error is attributed to a fact (model update) or a rule (patch); loosening patches need a precision bound | Planned (P4) |
+Each mechanism is set against the closest earlier work we know of. This is a first check, from our
+reading and targeted searches, not yet a systematic literature review: "no earlier instance found"
+means we did not find one, not that none exists. Our clearest new results are empirical (Section 7):
+where the contract compiler fails, that a larger model makes a more permissive gate, that
+model-supplied citations must be bound to their targets, and that contracts fail on exclusions.
+
+**No earlier instance found.**
+
+| Mechanism | What it is | Closest prior work | Status |
+|---|---|---|---|
+| Target-bound cited authorization | A quote of the user may unblock an action only if it names every target of that action, by a name no other resource shares | AuthGraph (Wang et al., 2026) has an LLM check tool parameters that should come from the user against the user's prompt; it binds no quote to a target and does not address names shared by several resources | Built, measured (Q3) |
+| Class-gated minimization | Reads and writes of *records* outside the contract are narrowed (Minimize) or asked; workspace files stay free to explore | Limited disclosure in Hippocratic databases (Agrawal et al., 2002) and row-level security narrow queries to permitted rows; AirGapAgent (Bagdasarian et al., 2024) minimizes the data an agent is given; AgentRaft (2026) measures agents' data over-exposure. None splits targets into records and workspace with Minimize as an outcome of the gate | Built, measured (oracle contract) |
+| FS/DB benchmark with a negation variant | Filesystem and database tasks on AmPermBench's three axes, with decoys and deterministic labels; a variant whose requests name something to leave alone | AmPermBench (Ji et al., 2026), whose axes we reuse; AuthorizationBench (Zhang et al., 2026) labels agents' out-of-authorization actions in ten domains, varied by trigger and consequence rather than explicitness and naming, and evaluates agents, not gates. Negation is a known weakness of language models in general | Built |
+
+**Our variant of a known idea.**
+
+| Mechanism | What it is | Closest prior work | What is ours | Status |
+|---|---|---|---|---|
+| Intent contracts | The request compiled into an envelope (permissions, with lifetimes: delete and upload grants last one user turn) and targets; tool output never widens permissions | Progent (Shi et al., 2025) and Conseca (Tsai and Bagdasarian, 2025) have an LLM write a task-specific policy from the user's request and enforce it in code; CaMeL (Debenedetti et al., 2025) keeps untrusted data from changing what the agent does | The envelope/target split; grant lifetimes | Built, measured |
+| Quote grounding | Every item the model puts in a contract must quote the user; code checks the quote is in a user turn, and one-turn permissions must quote the latest turn | Checking that a quote appears verbatim in its source is standard in citation-grounded generation; AuthGraph trusts only the user's prompt as a source of parameters | Verbatim quotes required for permissions, scoped to turns | Built, measured |
+| Facts with finite domains | The model fills typed facts, never verdicts; "unknown" is a value | Concept bottleneck models (Koh et al., 2020) predict named concepts and decide from them; Progent and Conseca also leave the decision to code | The fact set for data operations | Built |
+| Exact comparison of rule tables | Soft rows are boxes in the fact space; the rows split it into finitely many cells (4,320 for the first table) on which every table is constant, so a change can be classified as loosening or tightening exactly | Change-impact analysis of access-control policies (Margrave, Fisler et al., 2005), firewall-policy comparison, AWS's check that a policy grants no new access | Used on an LLM gate's rule table, as the basis for promoting rule patches (P4) | Built |
+
+**Known techniques we build on.**
+
+| Mechanism | What it is | Closest prior work | Status |
+|---|---|---|---|
+| Three-layer rules with an admin floor | Invariants no soft rule or citation can lower; checked by enumerating about 12,600 fact combinations | Policy combining in XACML (deny-overrides); AWS Service Control Policies, a ceiling no account policy can exceed; Zelkova (Backes et al., 2018) verifies AWS policies with an SMT solver | Built, verified |
+| SQL dry run | A statement's `WHERE` clause is run as a key query on a read-only snapshot, so the gate knows the exact rows | Standard database practice (run the `WHERE` as a SELECT before an UPDATE or DELETE); ToolEmu (Ruan et al., 2024) instead emulates tool effects with a language model | Built, verified |
+| Replayable evaluation | Every model answer is cached by the exact request; runs replay bit for bit without a GPU; caches from several servers merge by request | Response caching is common practice in evaluation frameworks | Built |
+| Transactional sandbox | Opaque programs run in an overlay and are judged on what they actually did | GoEX (Patil et al., 2024): run first, validate afterwards, with undo and damage confinement. Ours would judge the observed effects with the same rules | Planned (P2) |
+| Value handles | The model sees `⟦h:7f3a aws_secret len=40⟧` instead of a secret, at a chosen disclosure level | The Dual LLM pattern (Willison, 2023), CaMeL and FIDES (Costa et al., 2025) let a model work with references instead of values. Ours would add graded disclosure levels | Planned (P3) |
+| Abductive lifecycle loop | Each error is attributed to a fact (model update) or a rule (patch); loosening patches need a precision bound | Abductive Learning (Dai et al., 2019) is the method; LiSA (Kim et al., 2026) admits learned rules only above a conservative bound; GEPA (Agrawal et al., 2025) evolves prompts. Ours would apply them to a data-minimization gate | Planned (P4) |
+
+References for this section (arXiv identifiers where we have them): AmPermBench, Ji et al., *Measuring
+the Permission Gate*, 2604.04978; AuthGraph, Wang, Li and Tian, *Aligning Provenance with
+Authorization: A Dual-Graph Defense for LLM Agents*, 2605.26497; AuthorizationBench, Zhang et al.,
+*Act on Your Behalf, Beyond Your Authorization*, 2610.27548; AgentRaft, *Automated Detection of Data
+Over-Exposure in LLM Agents*, 2603.07557; Progent, 2504.11703; Conseca, *Contextual Agent Security: A
+Policy for Every Purpose*, 2501.17070; CaMeL, *Defeating Prompt Injections by Design*; FIDES,
+*Securing AI Agents with Information-Flow Control*; GoEX, *A Runtime for Autonomous LLM
+Applications*, 2404.06921; LiSA, 2605.14454; GEPA, *Reflective Prompt Evolution*; Dai et al.,
+*Bridging Machine Learning and Logical Reasoning by Abductive Learning*, NeurIPS 2019; Koh et al.,
+*Concept Bottleneck Models*, ICML 2020; Fisler et al., *Verification and Change-Impact Analysis of
+Access-Control Policies* (Margrave), ICSE 2005; Backes et al., *Semantic-based Automated Reasoning
+for AWS Access Policies using SMT* (Zelkova), FMCAD 2018; Agrawal et al., *Hippocratic Databases*,
+VLDB 2002; Bagdasarian et al., *AirGapAgent*, CCS 2024; Ruan et al., *Identifying the Risks of LM
+Agents with an LM-Emulated Sandbox* (ToolEmu), ICLR 2024; Willison, *The Dual LLM pattern*, 2023.
 
 ## 7. Experiments and outcomes
 
