@@ -95,19 +95,19 @@ a fact is open). Everything else is code.
 
 ## 4. What was built
 
-| Date | Milestone | Commit |
-|---|---|---|
-| 26 Oct | P0: evaluation harness: record format, scoring, confidence intervals, reports; AmPermBench probe set | `18c7fd2` |
-| 26 Oct | M1: shell effect resolver (tree-sitter); resolves all 2,560 AmPermBench probe commands exactly | `51ca519` |
-| 27 Oct | M2: fact schema, contract model, deterministic fact builder | `418e53a` |
-| 27 Oct | M3: rule engine on OPA (invariants, soft table, composition) | `2a04b5d` |
-| 27 Oct | M4: SQL resolver with dry run; the FS/DB development benchmark | `336c297` |
-| 27 Oct | M5: LLM layer (contract compiler, fact filler), built against scripted models | `e2782e9` |
-| 30 Oct | Q12: record-aware minimization of reads and writes; named destinations | `c65cf46` |
-| 2 Nov | Evaluation on the campus GPUs; parallel evaluation | `0dbcdb1`, `98978ce` |
-| 2 Nov | First model measurements; error analysis; a third, larger model | `3e8af60`, `784e0f1` |
-| 2 Nov | Q3: target-bound citations | `299a2d9` |
-| 2 Nov | Negation variant of the benchmark; runs across several servers | `1cf1b61`, `8f6df59` |
+| Milestone | Commit |
+|---|---|
+| P0: evaluation harness: record format, scoring, confidence intervals, reports; AmPermBench probe set | `18c7fd2` |
+| M1: shell effect resolver (tree-sitter); resolves all 2,560 AmPermBench probe commands exactly | `51ca519` |
+| M2: fact schema, contract model, deterministic fact builder | `418e53a` |
+| M3: rule engine on OPA (invariants, soft table, composition) | `2a04b5d` |
+| M4: SQL resolver with dry run; the FS/DB development benchmark | `336c297` |
+| M5: LLM layer (contract compiler, fact filler), built against scripted models | `e2782e9` |
+| Q12: record-aware minimization of reads and writes; named destinations | `c65cf46` |
+| Evaluation on the campus GPUs; parallel evaluation | `0dbcdb1`, `98978ce` |
+| First model measurements; error analysis; a third, larger model | `3e8af60`, `784e0f1` |
+| Q3: target-bound citations | `299a2d9` |
+| Negation variant of the benchmark; runs across several servers | `1cf1b61`, `8f6df59` |
 
 The code has 303 automated tests (`pytest`), the Rego policies have their own tests and a strict
 type check against the fact schema, and every model answer is cached so that any run can be replayed
