@@ -1,8 +1,8 @@
 # DMGate: progress report
 
 Huawei Trustworthiness Challenge 5, "Agent Data Minimization via Model–Rule Fusion".
-Status as of 3 November 2026. The full design, every decision and its evidence are in
-[DESIGN.md](DESIGN.md); this report summarizes them.
+The full design, every decision and its evidence are in [DESIGN.md](DESIGN.md); this report
+summarizes them.
 
 ## 1. Summary
 
@@ -133,7 +133,7 @@ value handles, the lifecycle loop and the agent runs (Section 6).
 
 Decisions were debated one at a time and recorded with their evidence (DESIGN §12).
 
-**Foundations (22–26 Oct).**
+**Foundations.**
 
 - Ask counts as blocking; a Minimize is scored on what still executes.
 - The language model supplies facts, not verdicts, plus two special facts: a cited authorization
@@ -145,7 +145,7 @@ Decisions were debated one at a time and recorded with their evidence (DESIGN §
 - Planned components agreed then: a transactional sandbox, value handles with graded disclosure, an
   abductive learning loop.
 
-**Q12: what the rules missed (30 Oct).** With a perfect contract, the first rules still let
+**Q12: what the rules missed.** With a perfect contract, the first rules still let
 over-reads and over-writes through, because any read or write inside the envelope was allowed.
 Measured with the oracle contract before deciding:
 
@@ -158,15 +158,15 @@ Measured with the oracle contract before deciding:
 The cost of narrowing was priced with a new coding family: 0 of 352 legitimate exploration actions
 were asked under A5 + B3, against 352 of 352 under the stricter alternative.
 
-**Infrastructure (27 Oct–2 Nov).** The models are open and self-hosted (Qwen family, Apache-2.0),
+**Infrastructure.** The models are open and self-hosted (Qwen family, Apache-2.0),
 served with vLLM on the university's shared GPU servers (RTX 3090 and RTX 4090). The agent model for
 end-to-end runs is also self-hosted (Q7). A rented cloud GPU was tried first and dropped.
 
-**Model choice within the challenge's rules (2 Nov).** The challenge requires general-purpose models
+**Model choice within the challenge's rules.** The challenge requires general-purpose models
 of minimal parameter scale. Our ladder: Qwen3.5-4B, Qwen3.5-9B, and Qwen3.8-27B (the smallest model
 of the newest Qwen generation, Apache-2.0). Security-tuned guard models are excluded by the rules.
 
-**Q3: cited authorization (2 Nov).** Decided **B, target-bound citations**, over keeping it as built,
+**Q3: cited authorization.** Decided **B, target-bound citations**, over keeping it as built,
 recompiling through the citation, lowering only one step, or switching citations off. Evidence in
 Section 7.4.
 
@@ -218,9 +218,9 @@ With target-bound citations (the current gate), all 3,616 FS/DB actions:
 | Qwen3.5-9B (FP8 weights) | 24.0% [21.2, 26.9] | 11.5% [9.0, 14.3] | 27.2% | 65.7% |
 | Qwen3.8-27B (FP8) | 13.0% [10.8, 15.4] | 18.0% [14.8, 21.5] | 24.6% | 69.7% |
 
-Runs `20261102-0852-measure` and `20261102-1053-measure` (FPR/FNR replayed with the current gate).
-Most blocking is done by Ask: counting Ask as allow, 78–81% of harmful actions would pass for every
-model. Far from the targets of 0.1% and 5%.
+FPR and FNR are replayed with the current gate from the recorded model answers; DESIGN.md §9 names
+each run and its manifest. Most blocking is done by Ask: counting Ask as allow, 78–81% of harmful
+actions would pass for every model. Far from the targets of 0.1% and 5%.
 
 ### 7.3 Where the errors come from
 
