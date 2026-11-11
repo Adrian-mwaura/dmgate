@@ -35,7 +35,7 @@ Three shared servers, one account (`adrianmwaura`, SSH key only), all on the cam
 | SSH name | Address, port | Cards | Driver | Home (on the big disk) | Python | Use |
 |---|---|---|---|---|---|---|
 | `zju3090` | 10.105.100.232, 22 (also 10022) | 8 × RTX 3090 (Ampere) | 590.48, CUDA 13.1 | `/home/part1/<user>` | 3.12 | set up; all gate models |
-| `zju4090` | 10.105.100.176, 10022 | 8 × RTX 4090 (Ada: native FP8) | 610.43 | `/data/home/<user>` | 3.12 | set up for the 27B |
+| `zju4090` | 10.105.100.176, 10022 | 8 × RTX 4090 (Ada: native FP8) | 610.43 | `/data/home/<user>` | 3.12 | set up (vLLM, OPA); for the M6 agent |
 | `zju4090b` | 10.109.92.119, 64122 | 8 × RTX 4090 | **550.144, CUDA 12.4** | `/data/home/<user>` | 3.11 | not used: the driver is likely too old for vLLM 0.31 |
 
 Their entries in `C:\Users\<you>\.ssh\config`:
@@ -121,7 +121,7 @@ accuracy needs it:
 | 1 | `Qwen/Qwen3.5-4B` (Apache-2.0) | 4.7B | bf16, `--language-model-only` | ~9.3 GB |
 | 2 | `openpangu/openPangu-Embedded-7B-V1.1` (Huawei; OPENPANGU MODEL LICENSE 1.0) | 8.0B | bf16 | ~16 GB |
 | 3 | `Qwen/Qwen3.5-9B` (Apache-2.0) | 9.7B | `QUANT=fp8`, `--language-model-only` | ~10 GB |
-| 4 | `Qwen/Qwen3.8-27B-FP8` (Apache-2.0; August 2026, the smallest Qwen3.8) | 27B + vision encoder | its own FP8 checkpoint, `--language-model-only`, **two cards** | ~31 GB (15.5 GB per card) |
+| (4) | `Qwen/Qwen3.8-27B-FP8`: **out of scope**, beyond the challenge's minimal parameter scale; measured once, results not reported | 27B + vision encoder | its own FP8 checkpoint, `--language-model-only`, **two cards** | ~31 GB (15.5 GB per card) |
 
 - Qwen3.5 models are vision-language models; `--language-model-only` skips the vision encoder and
   frees memory for the attention cache. They think out loud by default; the extra body below turns
@@ -131,14 +131,11 @@ accuracy needs it:
   a little slower. Weights download in bf16 (~19 GB for the 9B) and are converted at load time.
 - openPangu's card documents `transformers` and Ascend NPUs, not vLLM on NVIDIA GPUs. Check that it
   loads (`vllm serve` may need `--trust-remote-code`) and read its licence before using it.
-- Rung 4 runs on two cards with tensor parallelism: each card holds half of every layer, and the
-  two exchange partial results at every step. `measure.sh` reads the card count from the rung
-  (`TP=` overrides it). Its checkpoint is FP8 with block-wise scales; on the 3090, vLLM serves it
-  weight-only (as rung 3). If vLLM refuses that, the fallback is the bf16 weights (55.6 GB) on four
-  cards. Weights: `GET=qwen38-27b-fp8 bash scripts/server_setup.sh` (30.9 GB).
-- Gemma 4 26B-A4B (about 4B active parameters) and Muse Glimmer-30B were considered for rung 4:
-  Gemma's licence is not open-source, and Glimmer scores lower on instruction following (IFBench
-  77.0 against 79.5).
+- **Models over two cards** (the out-of-scope 27B rung, and the M6 agent): tensor parallelism puts
+  half of every layer on each card, and the two exchange partial results at every step. `measure.sh`
+  reads the card count from the rung (`TP=` overrides it). On the 3090 an FP8 checkpoint is served
+  weight-only (as rung 3), and Qwen's hybrid layers need `--max-num-seqs` below the state blocks the
+  cards can hold (two 3090s: 190).
 
 ## Prepare, measure, replay
 

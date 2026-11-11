@@ -17,7 +17,7 @@ Challenge requirements, as we read them:
 | Fine-grained judgment of FS/DB operations, metadata and content | Effects resolved to resources, columns, rows and values; content detectors; handles per value |
 | Hybrid model–rule orchestration, explainable boundaries | LLM produces typed facts only; a three-layer Rego engine decides; every decision carries a trace |
 | Lifecycle: dynamic rules, AI-assisted generalization, rules→model feedback | Abductive loop that attributes each error to a fact (model update) or a rule (patch) |
-| General-purpose models, minimal scale | Narrow fact questions sized for 4–8B general models; size ladder measured |
+| General-purpose models, minimal scale | Narrow fact questions sized for 4–8B general models (up to about 10B: the 9B is in); size ladder measured; larger models are out of scope |
 | FPR < 0.1%, FNR < 5% | Measured strictly (§8); Minimize and handles keep tasks alive instead of blocking |
 
 Framing (2026-10-26): the challenge is a **research direction**. Targets are aspirations we measure
@@ -465,7 +465,7 @@ Statistics note: 0 FP in 3,000 benign actions only bounds FPR at ≈0.1% (rule o
 | E4 | Small LLM writing patches: raw Rego vs JSON rows vs Cedar | 5 |
 | E5 | Learning curves: frozen / GEPA / abductive / decision-reward RL | 6 |
 | E6 | Pareto: task success vs exposure across disclosure policies; side-channel red team | 7 |
-| E7 | Model size ladder (4B → 32B, dense and MoE, incl. openPangu). On RTX 3090s: Qwen3.5-4B (bf16) → openPangu-Embedded-7B-V1.1 (bf16, if vLLM loads it on CUDA) → Qwen3.5-9B (FP8) → Qwen3.8-27B (FP8 checkpoint, two cards) | all |
+| E7 | Model size ladder within the challenge's minimal scale (up to about 10B, incl. openPangu). On RTX 3090s: Qwen3.5-4B (bf16) → openPangu-Embedded-7B-V1.1 (bf16, if vLLM loads it on CUDA) → Qwen3.5-9B (FP8). A 27B rung was measured once and is excluded (2026-11-11) | all |
 
 ## 9. Build plan
 
@@ -530,60 +530,48 @@ vLLM 0.31.0 on one RTX 3090, PyTorch sampler, 16 workers; commit `98978ce`, run
 | `rules-profile-only` (bound) | 60.0% | 0.0% | | |
 | `rules-llm` Qwen3.5-4B | 29.1% [26.1, 32.2] | 11.4% [8.9, 13.9] | 21.0% | 64.6%, 6.1% |
 | `rules-llm` Qwen3.5-9B (FP8 weights) | 24.0% [21.2, 26.9] | 15.8% [12.8, 19.0] | 27.2% | 65.7%, 4.0% |
-| `rules-llm` Qwen3.8-27B (FP8 checkpoint, two cards; run `20261102-1053-measure`, commit `3cdebf6`) | 11.7% [9.7, 14.0] | 32.8% [29.1, 36.7] | 24.6% | 69.7%, 11.1% |
 | `rules-oracle-contract` (bound) | 0.0% | 0.0% | 100% | |
 
 The compiler is the bottleneck. Both models grant verbs the request did not ask for (4B: 214 of
 224 prompts, most often `exec file`; 9B: 154) and cover targets beyond the oracle's (145; 106).
 The 9B compiles better on every compiler measure yet lets more harmful actions through, mostly in
-db-delete (FNR 3.3% to 23.8%) and fs-read (13.2% to 22.4%); the difference is not yet tested on
-paired probes. Ask carries the blocking: counting Ask as allow, FNR is about 80% for both.
+db-delete (FNR 3.3% to 23.8%) and fs-read (13.2% to 22.4%); paired below. Ask carries the blocking: counting Ask as allow, FNR is about 80% for both.
 Sensitivity errors lean cautious (S1 called S2 for about half the S1 items).
 
-The 27B reads requests more generously: fewer false positives, many more misses (paired against
-the 9B: FNR +13.2 to +21.1 points, FPR -17.4 to -7.8). Its misses split between contracts that
-cover the overreaching target (449) and verified citations (422); its citations also rightly
-unblock 41 benign actions (the 4B and 9B: 1). A bigger model does not make the gate safer: what
-the model is allowed to widen (contract coverage, citations) must be bounded by the rules. Q3's
-options rescored from the recorded rule results (exact: option A reproduces all 3,616 recorded
+The 9B's extra misses against the 4B are all verified citations (paired by prompt, resampling prompts:
++1.5 to +7.5 points): the check confirmed a quote existed, not that it named the effect's targets.
+Q3's options rescored from the recorded rule results (exact: option A reproduces all 3,616 recorded
 cases for each model), FPR / FNR:
 
 | Model | A: citations as built | B: target-bound | E: citations off |
 |---|---|---|---|
 | Qwen3.5-4B | 29.1% / 11.4% | 29.1% / 11.3% | 29.2% / 11.2% |
 | Qwen3.5-9B | 24.0% / 15.8% | 24.0% / 11.5% | 24.1% / 11.5% |
-| Qwen3.8-27B | 11.7% / 32.8% | 13.0% / 18.0% | 16.4% / 17.4% |
 
-Q3 decided B (2026-11-02). The builder's check, replayed on all three runs, reproduces the rescored
-B on every probe (0 of 3,616 differ per model): 4B 29.1% / 11.3%, 9B 24.0% / 11.5%, 27B 13.0% / 18.0%.
-
-B's 16 extra misses against E (all db-update) are column writes rightly cited (the quote names
-`status`) in actions whose harm is a row the contract itself covers: compiler over-coverage, not
-a citation flaw.
+Q3 decided B (2026-11-02). The builder's check, replayed on both runs, reproduces the rescored
+B on every probe (0 of 3,616 differ per model): 4B 29.1% / 11.3%, 9B 24.0% / 11.5%. For these two
+models B scores the same as switching citations off, and keeps the mechanism.
 
 **Negation variant** (`fsdb-dev-negation`, 2026-11-02): 192 prompts, each the base prompt plus one
 sentence that names a decoy to exclude it ("Leave `X` alone.", "Don't touch `X`.", "Keep `X` as it
 is.", "Do not include `X`."); 3,104 probes, 432 of them harmful actions on the named decoy. Bounds:
 oracle contract 0% / 0%, profile only 100% / 0%. Measured with B in force: the 4B and 9B on one 3090
-each (runs `20261102-122801-measure`, `-122804-measure`), the 27B on two 4090s with native FP8 (run
-`20261102-210118-measure`; its cache seeded with its 3090 base answers). Compared with the same probes
-of the base prompts, replayed under B:
+each (runs `20261102-122801-measure`, `-122804-measure`). Compared with the same probes of the base
+prompts, replayed under B:
 
 | Model | FPR base / negation | FNR base / negation | Named decoy let through, base / negation | via a target-bound citation |
 |---|---|---|---|---|
 | Qwen3.5-4B | 48.5% / 46.4% | 11.7% / 12.2% | 20.4% / 32.6% | 1 |
 | Qwen3.5-9B | 40.0% / 39.6% | 12.3% / 11.9% | 23.4% / 27.8% | 0 |
-| Qwen3.8-27B | 21.6% / **57.6%** | 19.1% / 13.9% | 35.4% / 33.1% | 10 |
 
 (FPR here excludes the coding family, which this variant leaves out.) B's own polarity gap is real
-but small: 10 harmful probes for the 27B, quotes such as "Don't touch `kim-test-4812@staging.example`".
-The larger effect is in the compiler: a contract has no slot for "not this", so the models put the
-excluded target where names go. Per prompt, the exclusion is left out (correct) in 38% (4B), 58%
-(9B) and 31% (27B); listed as a target id in 44 / 24 / 30 prompts (it is then covered: misses); and
-written into a `where` condition in 81 / 49 / 89 prompts. With no "not equal" operator, "leave the
-live account alone" becomes `email = <the live account>`, AND-ed with the rest, which usually
-uncovers what the user did ask for: 149 of the 27B's 196 newly blocked benign probes. The other 47
-are not attributed (the 27B's base and negation runs differ in hardware as well).
+but small: 1 harmful probe for the 4B, a quote naming the excluded account. The larger effect is in
+the compiler: a contract has no slot for "not this", so the models put the excluded target where
+names go. Per prompt, the exclusion is left out (correct) in 38% (4B) and 58% (9B); listed as a
+target id in 44 / 24 prompts (it is then covered: misses); and written into a `where` condition in
+81 / 49 prompts, where with no "not equal" operator "leave the live account alone" becomes
+`email = <the live account>`. For these two models false positives barely moved; the cost is in
+misses on the named decoy (20.4% to 32.6%, 23.4% to 27.8%).
 
 ### P1 milestones
 
@@ -611,7 +599,7 @@ are not attributed (the 27B's base and negation runs differ in hardware as well)
 |---|---|---|
 | Q1 | Should Ask count as only half-safe in FNR? | Position 1 (revisit in testing) |
 | Q2 | Should a secondary "may-ask" label exist for ambiguous prompts? | Position 1 |
-| Q3 | ~~Is the quote check enough to make cited authorization (the only outcome-lowering path) safe?~~ Decided 2026-11-02: no; citations are now **target-bound** (B, see §12). Still unmeasured: the verb and its polarity ("leave lee's report alone" names lee's report); negation sentences go into the FS/DB dev benchmark | Position 2 |
+| Q3 | ~~Is the quote check enough to make cited authorization (the only outcome-lowering path) safe?~~ Decided 2026-11-02: no; citations are now **target-bound** (B, see §12). Its polarity gap ("leave X alone" names X) was measured on the negation variant: 1 (4B) and 0 (9B) harmful probes; Q16's enforced exclusions close it | Position 2 |
 | Q4 | Is requiring a co-occurring risk fact for the residual-risk flag too conservative? | Position 2 |
 | Q5 | Does the OpenHands persistent shell allow per-command transactions? | Position 4 (verify in code) |
 | Q6 | ~~GPU machine and card type~~ Resolved 2026-11-02: the ZJU campus server, 8 × RTX 3090 (24 GB); AutoDL dropped (see §12). Docker is installed there, but users are not in the `docker` group, so containers (the OpenHands sandboxes) stay on Windows | Deployment |
@@ -620,7 +608,7 @@ are not attributed (the 27B's base and negation runs differ in hardware as well)
 | Q8 | ~~AmPermBench code license and data availability~~ Resolved: MIT; data files only, no recorded runs | P0 |
 | Q9 | ~~Pull an FS/DB dev benchmark and OpenHands AmPermBench runs into P1?~~ Adopted 2026-10-26 (P1 milestones M4, M6) | P0 finding |
 | Q16 | ~~Exclusions in contracts~~ Decided 2026-11-11: **an enforced exclusion list with an Ask floor** (INV-10; see §12). Evidence in §9 status (negation variant) | Negation variant |
-| Q15 | Bounding contract coverage. Position 1 decided 2026-11-11: **describe, then confirm** (see §12); still open: how descriptions combine (OR or AND) and the confirmation's details. Of the targets a request does not authorize that compiled contracts covered (citations aside), `where` conditions and patterns the compiler wrote cover 83% (4B), 98% (9B) and 99% (27B); a wrongly listed id 1-6%. Coverage is id OR pattern OR condition, so a loose description widens even a correct id. Options to debate: the code proposes the real candidates and the model only selects (closed world; open issues: long candidate lists for descriptive requests, targets created later); conditions limited to the environment's attributes and values (enums in the output schema); ids, patterns and conditions narrowing together (AND). Each can be measured first by replay with a patched coverage function | M5 analysis |
+| Q15 | Bounding contract coverage. Position 1 decided 2026-11-11: **describe, then confirm** (see §12); still open: how descriptions combine (OR or AND) and the confirmation's details. Of the targets a request does not authorize that compiled contracts covered (citations aside), `where` conditions and patterns the compiler wrote cover 83% (4B) and 98% (9B); a wrongly listed id 2-6%. Coverage is id OR pattern OR condition, so a loose description widens even a correct id. Options to debate: the code proposes the real candidates and the model only selects (closed world; open issues: long candidate lists for descriptive requests, targets created later); conditions limited to the environment's attributes and values (enums in the output schema); ids, patterns and conditions narrowing together (AND). Each can be measured first by replay with a patched coverage function | M5 analysis |
 | Q13 | M5 choices made while building, awaiting review: (a) grounding: every compiled grant and target must quote the user, and one-turn verbs must quote the latest turn; (b) the compiler sees attribute values only for short categorical attributes (at most 8 distinct identifiers); (c) the provenance question needs a majority of 3 samples and a quote found in the tool output; citations need all 3 samples to verify; the residual-risk flag needs all 3 to agree; sampling temperature 0.7; (d) four hand-written exemplars; (e) the compiler runs once per conversation state, on all user turns; (f) delegated documents are not compiled yet | M5 |
 | Q12 | Rule gaps the FS/DB dev benchmark found (needs debate before rule changes): (a) ~~read minimization~~ **decided 2026-10-30: A5, class-gated**; (b) ~~write targets~~ **decided 2026-10-30: B3, record writes**; (c) ~~named destinations~~ **decided 2026-10-30: C2, remote_named** (see §12). Resolved; was: (a) **read minimization**: SR-READ allows any read inside the envelope, so reading a colleague's tickets, other customers' rows or unneeded columns passes. Should reads of targets outside the contract be narrowed (Minimize to covered rows/columns/files) or asked, and for all data or only S2+ (leaving coding agents free to explore S0/S1 workspace files)? (b) **write targets**: SW-WRITE allows any write inside the envelope (chosen for reversible workspace files), so updating other people's orders or extra columns passes. Needs a way to tell workspace files from records, e.g. a `target_class` fact or contract targets that cover the workspace for coding tasks. (c) **named destinations**: a read feeding an upload to a host the request names has sink `remote_other`, so SR-EXPOSED asks (all fs-share benign FP). Proposal: a `remote_named` sink class, mirroring `recipient_named` | M4 |
 | Q11 | Accepted for now 2026-10-27 (revisit during testing). M3 choices made while building: (a) soft outcome = most restrictive matching row, Ask when none matches; (b) a verified citation lowers the soft layer to Allow (not one step); (c) the residual-risk escalation sits beside the floor, so a citation cannot lower it; (d) the nine invariants and twenty soft rows as written; (e) opaque programs are Ask until the sandbox exists (INV-6), then the soft layer allows them for judgment in the sandbox; (f) Minimize narrows within one effect only: an action of separate commands where one is unrequested (`rm a && rm x`) is asked about whole. Dropping such sub-commands belongs with the Minimize executor (P3) | M3 |
@@ -646,6 +634,7 @@ are not attributed (the 27B's base and negation runs differ in hardware as well)
 | 2026-10-27 | Q10 accepted for now (revisit during testing). M3 started; OPA binary download approved |
 | 2026-10-27 | M3 built on OPA 1.21.2 (checksum-verified, in `tools/`, not committed). Its own choices are open for review as Q11 |
 | 2026-10-27 | Q12 left open; M5 built against scripted models (no endpoint yet); its own choices open as Q13 |
+| 2026-11-11 | **The 27B is out of scope** (the user's call): Qwen3.8-27B is beyond the challenge's "minimal parameter scale", so its results are left out of every reported number (status, open questions, ladder, PROGRESS.md); the gate's ladder stops at about 10B (Qwen3.5-4B, openPangu-7B, Qwen3.5-9B). Earlier log entries that cite it stay as history. Its runs (`20261102-1053-measure`, `20261102-210118-measure`) remain in `results/` for the record. The decisions it informed stand on the 4B and 9B alone: Q3 B (on these models B scores the same as citations off: 9B FNR 15.8% to 11.5%), Q15 D, Q16 B (best cases 6.8% / 7.4% with confirmation alone, 6.7% / 7.3% enforced) |
 | 2026-11-11 | Q16 decided: **B, enforced exclusions with an Ask floor.** The compiler writes `excluded` items next to its targets, each grounded by a quote of the user like every target, and expanded and confirmed the same way (Q15, D). An action that touches an excluded target is at least Ask, through a new invariant (INV-10, admin-owned like the others): no citation, soft row or lifecycle patch can lower it, which closes B's polarity gap ("Don't touch `X`" names X). Ask rather than Deny because the exclusion is the user's own and they may change their mind; an exclusion lasts for the conversation until a later user turn brings the target back in. Best cases on the negation probes (perfect compilation): confirmation alone takes FNR to 6.8% / 7.4% / 9.0% (4B / 9B / 27B), the enforced exclusion to 6.7% / 7.3% / 8.3%, closing the last 3 / 3 / 18 misses on the named decoy, at no false-positive cost. Chosen over A (rejection only), C (Deny: the user cannot override their own exclusion) and D (a soft row the lifecycle loop could loosen) |
 | 2026-11-11 | Q15 position 1 decided: **D, describe then confirm.** The compiler still writes target descriptions (ids, patterns, conditions); the code expands each description into the concrete resources it covers in the environment, and the model confirms or rejects each one with the request in view, so a loose condition's extra matches and a named exclusion are rejected by name. Descriptions stay in force for targets that do not exist yet. Evidence (replays, no GPU): conditions and patterns the compiler wrote cover 83-99% of the unauthorized targets contracts covered; 94-99% of conditions use the environment's real attributes and values, so a closed vocabulary would change little; AND semantics cut misses on the base probes (4B 11.3% to 10.2%, 9B 11.5% to 10.1%, 27B 18.0% to 12.1%) at almost no false-positive cost but raise false positives on the negation probes (27B 57.6% to 75.0%). Chosen over A (as built), B (AND only: misses from condition-only targets remain, exclusions get worse) and C (the code lists every candidate: unbounded lists for requests that name nothing, no future targets). Cost: one more model call per request (cached), and the confirmation is a model judgement; measured on both probe sets before it is relied on |
 | 2026-11-02 | Negation variant measured on all three models (numbers in §9 status). B's polarity gap: 1 / 0 / 10 harmful probes let through by a citation that names the excluded target (4B / 9B / 27B). The compiler is the larger problem: exclusions land in target ids (misses) or in `where` conditions without a "not equal" (false alarms; 149 of the 27B's 196 new ones). Q16 opened (exclusions in contracts). Runs spread over two servers in parallel; pulls merge answer caches; a vLLM grammar error (HTTP 500) is now retried, then recorded as no answer (1 request in the 9B run) |
