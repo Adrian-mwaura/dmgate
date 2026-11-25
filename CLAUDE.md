@@ -8,9 +8,11 @@ decisions, open questions and build plan live in `docs/DESIGN.md`; read it befor
 - Design changes are debated with the user one position at a time and agreed before code.
   Record outcomes in `docs/DESIGN.md` §12 (decision log); keep unresolved points in §11.
 - The challenge is a research direction: prefer novel mechanisms, but report numbers strictly (§8).
-- **Never simplify the project** to fit current experience. Keep the full design and bring the user
+- **Never simplify the design to make it easier to learn.** Keep the full design and bring the user
   up to speed. The user is fluent in Python and new to pytest, git, Docker, tree-sitter, Rego and
   vLLM: teach those from first principles when they come up.
+- Simplifying because the evidence shows a mechanism doesn't earn its place is allowed, and is
+  debated like any other design change.
 
 ## How we build (since 2026-10-26)
 
